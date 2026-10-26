@@ -174,6 +174,8 @@ struct PackageInfo: Equatable {
     var bundleID: String
     var version: String
     var build: String
+    /// PNG bytes of an .ipa's app icon; nil for .pkg and for builds that keep the icon only in Assets.car.
+    var icon: Data?
 
     /// Reads the app's identity straight out of the archive; bsdtar handles both zip (.ipa) and xar (.pkg).
     static func read(_ url: URL) -> PackageInfo? {
@@ -181,12 +183,28 @@ struct PackageInfo: Equatable {
     }
 
     private static func ipa(_ url: URL) -> PackageInfo? {
-        guard let list = tar("-tf", url).flatMap({ String(data: $0, encoding: .utf8) }),
-              let path = list.split(separator: "\n").first(where: { $0.wholeMatch(of: #/Payload\/[^\/]+\.app\/Info\.plist/#) != nil }),
-              let data = tar("-xOf", url, String(path)),
-              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+        guard let entries = tar("-tf", url).flatMap({ String(data: $0, encoding: .utf8) })?.split(separator: "\n").map(String.init),
+              let path = entries.first(where: { $0.wholeMatch(of: #/Payload\/[^\/]+\.app\/Info\.plist/#) != nil }),
+              let data = tar("-xOf", url, path),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              var info = fromPlist(plist)
         else { return nil }
-        return fromPlist(plist)
+        info.icon = iconPath(plist, in: entries, app: String(path.dropLast("Info.plist".count))).flatMap { tar("-xOf", url, $0) }
+        return info
+    }
+
+    /// The loose icon PNG the plist names, from the app's top level (not its extensions or frameworks).
+    /// Xcode stores these Apple-crushed (CgBI); macOS ImageIO decodes them.
+    static func iconPath(_ plist: [String: Any], in entries: [String], app: String) -> String? {
+        let names = ["CFBundleIcons", "CFBundleIcons~ipad"].flatMap {
+            ((plist[$0] as? [String: Any])?["CFBundlePrimaryIcon"] as? [String: Any])?["CFBundleIconFiles"] as? [String] ?? []
+        }
+        // ponytail: picks the name that sorts last (76x76 over 60x60, @3x over @2x), not by reading pixel sizes.
+        return entries.filter { entry in
+            guard entry.hasPrefix(app), entry.hasSuffix(".png") else { return false }
+            let file = entry.dropFirst(app.count)
+            return !file.contains("/") && names.contains { file.hasPrefix($0) }
+        }.max()
     }
 
     private static func pkg(_ url: URL) -> PackageInfo? {

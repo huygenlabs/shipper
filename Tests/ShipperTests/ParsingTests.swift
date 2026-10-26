@@ -128,3 +128,19 @@ import Testing
     #expect(throws: Never.self) { try Updater.verify(calculator, against: calculator) }
     #expect(throws: (any Error).self) { try Updater.verify(textEdit, against: calculator) }
 }
+
+@Test func picksAppIconFromIpaListing() {
+    let plist: [String: Any] = [
+        "CFBundleIcons": ["CFBundlePrimaryIcon": ["CFBundleIconFiles": ["AppIcon60x60"]]],
+        "CFBundleIcons~ipad": ["CFBundlePrimaryIcon": ["CFBundleIconFiles": ["AppIcon60x60", "AppIcon76x76"]]],
+    ]
+    let entries = [
+        "Payload/Runner.app/Info.plist",
+        "Payload/Runner.app/AppIcon60x60@2x.png",
+        "Payload/Runner.app/AppIcon76x76@2x~ipad.png",
+        "Payload/Runner.app/PlugIns/Widget.appex/AppIcon99x99@3x.png",
+        "Payload/Runner.app/LaunchImage.png",
+    ]
+    #expect(PackageInfo.iconPath(plist, in: entries, app: "Payload/Runner.app/") == "Payload/Runner.app/AppIcon76x76@2x~ipad.png")
+    #expect(PackageInfo.iconPath([:], in: entries, app: "Payload/Runner.app/") == nil)
+}

@@ -410,9 +410,19 @@ struct JobRow: View {
     var body: some View {
         // Top-aligned so the icon and buttons stay beside the name when error details expand the row.
         HStack(alignment: .top, spacing: 12) {
-            Image(nsImage: NSWorkspace.shared.icon(forFile: job.url.path))
-                .resizable()
-                .frame(width: 40, height: 40)
+            Group {
+                if let icon = job.info?.icon.flatMap(NSImage.init(data:)) {
+                    // iOS icons ship square and the system masks them; inset to match Finder icons' visual size.
+                    Image(nsImage: icon)
+                        .resizable()
+                        .clipShape(RoundedRectangle(cornerRadius: 7.5, style: .continuous))
+                        .padding(3)
+                } else {
+                    Image(nsImage: NSWorkspace.shared.icon(forFile: job.url.path))
+                        .resizable()
+                }
+            }
+            .frame(width: 40, height: 40)
             VStack(alignment: .leading, spacing: 3) {
                 Text(job.name).font(.headline)
                 Text(details)
