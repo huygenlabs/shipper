@@ -27,9 +27,10 @@ file in, and Shipper verifies it on its own. When verification passes, a **Deliv
   message, which you can select or copy.
 - Per-build log, Stop, Show in Finder.
 - Open `.ipa` and `.pkg` files from Finder with Shipper.
-- **Update check.** Shipper checks this repo for a newer version at launch and once a day, and offers to
-  download it. It never installs anything by itself. **Shipper → Check for Updates…** checks now; turn
-  automatic checks off in the same menu.
+- **Updates itself.** At launch and once a day Shipper checks this repo for a newer version, downloads it in
+  the background and installs it when you quit, or right away with **Relaunch Now**. An update is installed
+  only if it's signed by the same certificate as the copy you're running. **Shipper → Check for Updates…**
+  checks now; **Install Updates Automatically** in the same menu turns it off.
 
 ## Requirements
 
@@ -55,7 +56,7 @@ can't reveal a tampered repo. If that matters to you, build from source instead.
 
 ```sh
 shasum -a 256 ~/Downloads/Shipper.dmg
-# 08346b4c8b28219d6b5b654f5b723b186a9b8cd80213e6a154481a7298caaf75
+# 548b0ba02fe5dda7c7f9f3b26cb3cc6ae1a6643dba1dccd7b36446bd08a0446e
 ```
 
 ## Use
@@ -81,12 +82,16 @@ takes an app-specific password instead. You can revoke one at any time at
   never appear in process arguments (`ps`) or in the environment of any process. If the Keychain has no
   password (or you deny access), Shipper asks you to sign in again instead of trying an empty one, because
   repeated failed logins can lock an Apple Account. Signing out deletes the Keychain item.
-- **Network:** the only request Shipper makes itself is the update check: a plain HTTPS GET of
-  [`Info.plist`](https://raw.githubusercontent.com/huygenlabs/shipper/main/Info.plist) from GitHub, which sends
-  nothing about you or your accounts. Only the version number is read from the reply, and **Download** just
-  opens the `.dmg` link in your browser. Turn it off with **Shipper → Check for Updates Automatically**.
-  Everything else goes from Apple's `altool` to Apple.
-- **Stored settings** (`~/Library/Preferences/local.appuploader.AppUploader.plist`): signed-in Apple Account
+- **Network:** the only requests Shipper makes itself are for updates: plain HTTPS GETs of
+  [`Info.plist`](https://raw.githubusercontent.com/huygenlabs/shipper/main/Info.plist) and, when it lists a newer
+  version, `Shipper.dmg`, both from this repo. They send nothing about you or your accounts. Everything else
+  goes from Apple's `altool` to Apple.
+- **Updates** are checked before they're installed: the new `Shipper.app` must pass the installed copy's code
+  signing requirement (same bundle ID, same signing certificate) and be a newer version. A tampered download
+  or repo can't install an app signed by someone else. Shipper replaces itself only where you put it, and
+  only when it can write there; otherwise it offers the download instead. Turn updates off with
+  **Shipper → Install Updates Automatically**.
+- **Stored settings** (`~/Library/Preferences/io.github.huygenlabs.shipper.plist`): signed-in Apple Account
   emails, developer account names and IDs, and the last selection. No passwords.
 - **Builds you add** are read with `/usr/bin/tar` to show their version and bundle ID. Reads are capped at
   16 MB so a malformed archive can't exhaust memory, and nothing is extracted to disk.
@@ -112,7 +117,9 @@ the app keeps the same identity and the Keychain doesn't ask for your Mac passwo
 
 To release an update, raise `CFBundleShortVersionString` (and `CFBundleVersion`) in `Info.plist`, run
 `./build.sh`, update the checksum above, then commit and push. Installed copies see the new version in
-`Info.plist` on `main` and offer the new `Shipper.dmg`.
+`Info.plist` on `main`, download the new `Shipper.dmg` and install it. They only accept apps signed with the
+same certificate, so release builds must come from the machine that holds the signing keychain. Back up
+`~/Library/Application Support/Shipper/signing/`; without it, installed copies can't update automatically.
 
 `make-icon.swift` redraws the app icon:
 `swift make-icon.swift && iconutil -c icns build/AppIcon.iconset -o AppIcon.icns`.

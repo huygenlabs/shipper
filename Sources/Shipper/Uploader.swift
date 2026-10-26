@@ -84,8 +84,8 @@ struct Target: Codable, Hashable {
 }
 
 enum Keychain {
-    private static func query(_ account: String) -> [CFString: Any] {
-        [kSecClass: kSecClassGenericPassword, kSecAttrService: "AppUploader", kSecAttrAccount: account]
+    private static func query(_ account: String, service: String = "Shipper") -> [CFString: Any] {
+        [kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: account]
     }
 
     static func save(_ password: String, for account: String) -> Bool {
@@ -95,16 +95,16 @@ enum Keychain {
         return SecItemAdd(q as CFDictionary, nil) == errSecSuccess
     }
 
-    static func load(_ account: String) -> String? {
-        var q = query(account)
+    static func load(_ account: String, service: String = "Shipper") -> String? {
+        var q = query(account, service: service)
         q[kSecReturnData] = true
         var out: CFTypeRef?
         guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let data = out as? Data else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
-    static func delete(_ account: String) {
-        SecItemDelete(query(account) as CFDictionary)
+    static func delete(_ account: String, service: String = "Shipper") {
+        SecItemDelete(query(account, service: service) as CFDictionary)
     }
 }
 
@@ -294,17 +294,27 @@ final class Store {
     init() {
         let defaults = UserDefaults.standard
         accounts = defaults.data(forKey: "accounts").flatMap { try? JSONDecoder().decode([Account].self, from: $0) } ?? []
-        // Carry over the single sign-in saved by the previous version.
-        if let old = defaults.string(forKey: "appleID") {
-            defaults.removeObject(forKey: "appleID")
-            if !accounts.contains(where: { $0.appleID == old }) { accounts.append(Account(appleID: old)) }
-        }
         // Team lists change rarely but do change (new teams, renamed companies), so re-read them each launch.
         for account in accounts {
             Task { await refresh(account.appleID) }
         }
         let saved = defaults.data(forKey: "selection").flatMap { try? JSONDecoder().decode(Target.self, from: $0) }
         selection = saved.flatMap { isValid($0) ? $0 : nil } ?? accounts.first?.defaultTarget
+    }
+
+    /// Shipper 1.1 and older were saved as "AppUploader". Moves their settings and passwords over once, then deletes
+    /// the old copies. Called at launch before the store loads; drop it once nobody runs 1.1.
+    static func moveFromOldName() {
+        let old = "local.appuploader.AppUploader", defaults = UserDefaults.standard
+        guard defaults.object(forKey: "accounts") == nil, let saved = UserDefaults(suiteName: old),
+              let data = saved.data(forKey: "accounts") else { return }
+        for key in ["accounts", "selection", Updater.autoCheckKey] { defaults.set(saved.object(forKey: key), forKey: key) }
+        for account in (try? JSONDecoder().decode([Account].self, from: data)) ?? [] {
+            if let password = Keychain.load(account.appleID, service: "AppUploader"), Keychain.save(password, for: account.appleID) {
+                Keychain.delete(account.appleID, service: "AppUploader")
+            }
+        }
+        defaults.removePersistentDomain(forName: old)
     }
 
     /// The target still names a signed-in account and, if it has one, a team that account still has.

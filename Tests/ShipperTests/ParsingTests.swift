@@ -121,3 +121,10 @@ import Testing
     #expect(Updater.version(fromPlist: try plist("1.2; rm -rf ~")) == nil)
     #expect(Updater.version(fromPlist: Data("<html>404</html>".utf8)) == nil)
 }
+
+@Test func installsOnlyAppsSignedLikeTheInstalledCopy() {
+    let calculator = URL(filePath: "/System/Applications/Calculator.app")
+    let textEdit = URL(filePath: "/System/Applications/TextEdit.app")
+    #expect(throws: Never.self) { try Updater.verify(calculator, against: calculator) }
+    #expect(throws: (any Error).self) { try Updater.verify(textEdit, against: calculator) }
+}

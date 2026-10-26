@@ -5,6 +5,8 @@ struct ShipperApp: App {
     @NSApplicationDelegateAdaptor private var delegate: AppDelegate
     @AppStorage(Updater.autoCheckKey) private var checksForUpdates = true
 
+    init() { Store.moveFromOldName() }
+
     var body: some Scene {
         Window("Shipper", id: "main") {
             ContentView().environment(AppDelegate.store)
@@ -12,7 +14,7 @@ struct ShipperApp: App {
         .commands {
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") { Task { await Updater.check(userInitiated: true) } }
-                Toggle("Check for Updates Automatically", isOn: $checksForUpdates)
+                Toggle("Install Updates Automatically", isOn: $checksForUpdates)
             }
             CommandGroup(replacing: .newItem) {
                 Button("Add App…") { AppDelegate.store.openPanel() }
@@ -48,6 +50,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard alert.runModal() == .alertFirstButtonReturn else { return .terminateCancel }
         running.forEach(Self.store.stop)
         return .terminateNow
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        Updater.installIfReady()
     }
 }
 
