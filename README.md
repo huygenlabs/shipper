@@ -56,7 +56,7 @@ can't reveal a tampered repo. If that matters to you, build from source instead.
 
 ```sh
 shasum -a 256 ~/Downloads/Shipper.dmg
-# 548b0ba02fe5dda7c7f9f3b26cb3cc6ae1a6643dba1dccd7b36446bd08a0446e
+# 6d2cb7dcdd511072a345814688ba7f2c3a68782c7aa4c4302e4970d889b3e33e
 ```
 
 ## Use
@@ -137,3 +137,11 @@ Transporter's upload engine is Apple's `ContentDelivery.framework`. Xcode ships 
 
 Code: `Sources/Shipper/Uploader.swift` (accounts, Keychain, altool, archive reading) and
 `Sources/Shipper/App.swift` (UI), `Sources/Shipper/Updater.swift` (update check).
+
+## License
+
+Copyright © 2026 HuygenLabs. Shipper is open source under the [Apache License 2.0](LICENSE).
+
+You may use, change and redistribute it, including in commercial products. If you distribute Shipper or
+anything built from it, include the [LICENSE](LICENSE) and keep the credit to HuygenLabs from the
+[NOTICE](NOTICE) file, as section 4 of the license requires.
