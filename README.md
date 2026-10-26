@@ -6,6 +6,15 @@ A small macOS app for sending `.ipa` and `.pkg` builds to App Store Connect, mod
 Sign in to several Apple Accounts at once, pick the developer account (team) a build belongs to, drop the
 file in, and Shipper verifies it on its own. When verification passes, a **Deliver** button appears.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/home-dark.png">
+  <img src="docs/screenshots/home.png" alt="Shipper with two Apple Accounts in the sidebar and a queue of builds: one verified, one verifying, one failed, one delivered">
+</picture>
+
+<p align="center"><img src="docs/screenshots/sign-in.png" width="480" alt="Shipper sign-in screen"></p>
+
+<sub>Accounts, teams and builds in the screenshots are made up.</sub>
+
 ## Features
 
 - **Several Apple Accounts at once.** Add accounts from the sidebar; no signing out to switch.
@@ -18,6 +27,9 @@ file in, and Shipper verifies it on its own. When verification passes, a **Deliv
   message, which you can select or copy.
 - Per-build log, Stop, Show in Finder.
 - Open `.ipa` and `.pkg` files from Finder with Shipper.
+- **Update check.** Shipper checks this repo for a newer version at launch and once a day, and offers to
+  download it. It never installs anything by itself. **Shipper → Check for Updates…** checks now; turn
+  automatic checks off in the same menu.
 
 ## Requirements
 
@@ -43,7 +55,7 @@ can't reveal a tampered repo. If that matters to you, build from source instead.
 
 ```sh
 shasum -a 256 ~/Downloads/Shipper.dmg
-# 0ff51cc7d0b53d720dad2ea7587c89ae79e2eb94b39cf50a8a44c9cf381f771d
+# 08346b4c8b28219d6b5b654f5b723b186a9b8cd80213e6a154481a7298caaf75
 ```
 
 ## Use
@@ -69,7 +81,11 @@ takes an app-specific password instead. You can revoke one at any time at
   never appear in process arguments (`ps`) or in the environment of any process. If the Keychain has no
   password (or you deny access), Shipper asks you to sign in again instead of trying an empty one, because
   repeated failed logins can lock an Apple Account. Signing out deletes the Keychain item.
-- **Network:** Shipper makes no network requests of its own. All traffic goes from Apple's `altool` to Apple.
+- **Network:** the only request Shipper makes itself is the update check: a plain HTTPS GET of
+  [`Info.plist`](https://raw.githubusercontent.com/huygenlabs/shipper/main/Info.plist) from GitHub, which sends
+  nothing about you or your accounts. Only the version number is read from the reply, and **Download** just
+  opens the `.dmg` link in your browser. Turn it off with **Shipper → Check for Updates Automatically**.
+  Everything else goes from Apple's `altool` to Apple.
 - **Stored settings** (`~/Library/Preferences/local.appuploader.AppUploader.plist`): signed-in Apple Account
   emails, developer account names and IDs, and the last selection. No passwords.
 - **Builds you add** are read with `/usr/bin/tar` to show their version and bundle ID. Reads are capped at
@@ -94,6 +110,10 @@ On first run `build.sh` creates a self-signed code-signing certificate in its ow
 your user can read. Every build after that is signed with it, so
 the app keeps the same identity and the Keychain doesn't ask for your Mac password after each rebuild.
 
+To release an update, raise `CFBundleShortVersionString` (and `CFBundleVersion`) in `Info.plist`, run
+`./build.sh`, update the checksum above, then commit and push. Installed copies see the new version in
+`Info.plist` on `main` and offer the new `Shipper.dmg`.
+
 `make-icon.swift` redraws the app icon:
 `swift make-icon.swift && iconutil -c icns build/AppIcon.iconset -o AppIcon.icns`.
 
@@ -109,4 +129,4 @@ Transporter's upload engine is Apple's `ContentDelivery.framework`. Xcode ships 
 | Deliver | `--upload-package <file> --provider-public-id <id>` |
 
 Code: `Sources/Shipper/Uploader.swift` (accounts, Keychain, altool, archive reading) and
-`Sources/Shipper/App.swift` (UI).
+`Sources/Shipper/App.swift` (UI), `Sources/Shipper/Updater.swift` (update check).

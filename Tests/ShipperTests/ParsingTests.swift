@@ -104,3 +104,20 @@ import Testing
     store.add([URL(string: "https://example.com/Evil.ipa")!])
     #expect(store.jobs.isEmpty)
 }
+
+@Test func comparesVersionsNumerically() {
+    #expect(Updater.isNewer("1.1", than: "1.0"))
+    #expect(Updater.isNewer("1.10", than: "1.9"))
+    #expect(Updater.isNewer("2", than: "1.9.9"))
+    #expect(!Updater.isNewer("1.0", than: "1.0.0"))
+    #expect(!Updater.isNewer("1.0", than: "1.1"))
+}
+
+@Test func readsOnlyAPlainVersionFromTheRemotePlist() throws {
+    func plist(_ version: String) throws -> Data {
+        try PropertyListSerialization.data(fromPropertyList: ["CFBundleShortVersionString": version], format: .xml, options: 0)
+    }
+    #expect(Updater.version(fromPlist: try plist("1.2.3")) == "1.2.3")
+    #expect(Updater.version(fromPlist: try plist("1.2; rm -rf ~")) == nil)
+    #expect(Updater.version(fromPlist: Data("<html>404</html>".utf8)) == nil)
+}

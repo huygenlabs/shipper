@@ -3,12 +3,17 @@ import SwiftUI
 @main
 struct ShipperApp: App {
     @NSApplicationDelegateAdaptor private var delegate: AppDelegate
+    @AppStorage(Updater.autoCheckKey) private var checksForUpdates = true
 
     var body: some Scene {
         Window("Shipper", id: "main") {
             ContentView().environment(AppDelegate.store)
         }
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { Task { await Updater.check(userInitiated: true) } }
+                Toggle("Check for Updates Automatically", isOn: $checksForUpdates)
+            }
             CommandGroup(replacing: .newItem) {
                 Button("Add App…") { AppDelegate.store.openPanel() }
                     .keyboardShortcut("o")
@@ -20,6 +25,10 @@ struct ShipperApp: App {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor static let store = Store()
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        Task { await Updater.checkPeriodically() }
+    }
 
     /// Files opened from Finder (Info.plist registers .ipa and .pkg, like Transporter).
     func application(_ application: NSApplication, open urls: [URL]) {
@@ -53,7 +62,7 @@ struct ContentView: View {
             } else {
                 NavigationSplitView {
                     AccountsSidebar { addingAccount = true }
-                        .navigationSplitViewColumnWidth(min: 220, ideal: 260)
+                        .navigationSplitViewColumnWidth(min: 250, ideal: 300)
                 } detail: {
                     QueueView()
                 }
