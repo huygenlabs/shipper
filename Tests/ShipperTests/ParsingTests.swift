@@ -105,6 +105,25 @@ import Testing
     #expect(store.jobs.isEmpty)
 }
 
+/// Delivered builds survive a relaunch until cleared, and never block adding a newer build from the same path.
+@MainActor @Test func keepsDeliveredJobsAcrossLaunches() {
+    let url = URL(fileURLWithPath: "/tmp/Demo.ipa"), target = Target(appleID: "nobody@example.invalid", publicID: nil)
+    let job = Job(url: url, target: target)
+    job.info = PackageInfo(name: "Demo", bundleID: "com.acme.demo", version: "1.0", build: "7", icon: Data([1, 2]))
+    job.state = .delivered
+    let store = Store()
+    store.jobs = [job, Job(url: URL(fileURLWithPath: "/tmp/Other.ipa"), target: target)]
+    let relaunched = Store()
+    #expect(relaunched.jobs.map(\.info) == [job.info])
+    #expect(relaunched.jobs.first?.state == .delivered)
+    relaunched.selection = target
+    relaunched.add([url])
+    #expect(relaunched.jobs.count == 2)
+    relaunched.clear()
+    #expect(relaunched.jobs.isEmpty)
+    #expect(Store().jobs.isEmpty)
+}
+
 @Test func comparesVersionsNumerically() {
     #expect(Updater.isNewer("1.1", than: "1.0"))
     #expect(Updater.isNewer("1.10", than: "1.9"))

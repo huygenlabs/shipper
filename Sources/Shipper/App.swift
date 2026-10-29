@@ -373,6 +373,11 @@ struct QueueView: View {
         .navigationTitle(store.selectedProvider?.name ?? store.selection?.appleID ?? "Shipper")
         .navigationSubtitle(store.selectedProvider == nil ? "" : store.selection?.appleID ?? "")
         .toolbar {
+            ToolbarItem {
+                Button(action: store.clear) { Label("Clear", systemImage: "clear") }
+                    .help("Remove finished builds from this list")
+                    .disabled(!jobs.contains { !$0.isRunning })
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button(action: store.openPanel) { Label("Add App", systemImage: "plus") }
                     .help("Add an .ipa or .pkg")

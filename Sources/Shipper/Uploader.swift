@@ -169,7 +169,7 @@ enum Altool {
 
 // MARK: - Package info
 
-struct PackageInfo: Equatable {
+struct PackageInfo: Codable, Equatable {
     var name: String
     var bundleID: String
     var version: String
@@ -279,6 +279,29 @@ final class Job: Identifiable {
         size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
     }
 
+    /// What a delivered job keeps across launches; the package itself may since have moved or been deleted.
+    struct Saved: Codable {
+        var url: URL
+        var target: Target
+        var size: Int64
+        var info: PackageInfo?
+        var deliveryID: String?
+        var log: [String]
+    }
+
+    var saved: Saved { Saved(url: url, target: target, size: size, info: info, deliveryID: deliveryID, log: log) }
+
+    init(delivered saved: Saved) {
+        url = saved.url
+        target = saved.target
+        size = saved.size
+        info = saved.info
+        deliveryID = saved.deliveryID
+        log = saved.log
+        state = .delivered
+        verified = true
+    }
+
     func handle(_ raw: String) {
         let line = Altool.clean(raw)
         guard !line.isEmpty else { return }
@@ -303,7 +326,11 @@ final class Store {
     var selection: Target? {
         didSet { UserDefaults.standard.set(try? JSONEncoder().encode(selection), forKey: "selection") }
     }
-    var jobs: [Job] = []
+    /// Delivered jobs are kept across launches until removed or cleared.
+    // ponytail: icons and logs sit in UserDefaults; move to a file in Application Support if histories grow large.
+    var jobs: [Job] = [] {
+        didSet { saveDelivered() }
+    }
     /// Why an account's teams couldn't be refreshed, by Apple ID.
     var refreshErrors: [String: String] = [:]
     /// Apple IDs whose teams are being fetched right now.
@@ -318,6 +345,13 @@ final class Store {
         }
         let saved = defaults.data(forKey: "selection").flatMap { try? JSONDecoder().decode(Target.self, from: $0) }
         selection = saved.flatMap { isValid($0) ? $0 : nil } ?? accounts.first?.defaultTarget
+        jobs = (defaults.data(forKey: "delivered").flatMap { try? JSONDecoder().decode([Job.Saved].self, from: $0) } ?? [])
+            .map { Job(delivered: $0) }
+    }
+
+    private func saveDelivered() {
+        let delivered = jobs.filter { $0.state == .delivered }.map(\.saved)
+        UserDefaults.standard.set(try? JSONEncoder().encode(delivered), forKey: "delivered")
     }
 
     /// Shipper 1.1 and older were saved as "AppUploader". Moves their settings and passwords over once, then deletes
@@ -399,7 +433,8 @@ final class Store {
     func add(_ urls: [URL]) {
         guard let target = selection else { return }
         for url in urls where url.isFileURL && ["ipa", "pkg"].contains(url.pathExtension.lowercased())
-            && !jobs.contains(where: { $0.url == url && $0.target == target }) {
+            // A delivered row is history: a newer build exported to the same path is a new job.
+            && !jobs.contains(where: { $0.url == url && $0.target == target && $0.state != .delivered }) {
             let job = Job(url: url, target: target)
             jobs.append(job)
             start(job, deliver: false)  // verify on add; Deliver unlocks once it passes
@@ -443,6 +478,7 @@ final class Store {
             job.state = status == 0 ? (deliver ? .delivered : .verified) : .failed
             if status == 0, !deliver { job.verified = true }
             if status != 0, job.issues.isEmpty { job.issues = ["altool exited with code \(status) without an error message. See the full log."] }
+            saveDelivered()
         }
     }
 
@@ -455,5 +491,10 @@ final class Store {
     func remove(_ job: Job) {
         stop(job)
         jobs.removeAll { $0 === job }
+    }
+
+    /// Empties the selected account's list, leaving uploads that are still running.
+    func clear() {
+        jobs.removeAll { !$0.isRunning && $0.target == selection }
     }
 }
