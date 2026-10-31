@@ -215,8 +215,12 @@ struct AccountsSidebar: View {
                                         accountMenu(account)
                                     }
                             } else {
-                                Label("Default developer account", systemImage: "person.2")
-                                    .help("Developer accounts couldn't be listed; altool picks the only one.")
+                                Label {
+                                    Text("Default developer account")
+                                } icon: {
+                                    ProviderIcon(systemName: "person.2.fill")
+                                }
+                                .help("Developer accounts couldn't be listed; altool picks the only one.")
                             }
                         }
                         .badge(store.jobs.filter { $0.target == row.target }.count)
@@ -229,6 +233,20 @@ struct AccountsSidebar: View {
             }
         }
         .listStyle(.sidebar)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            HStack(spacing: 8) {
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .frame(width: 24, height: 24)
+                    .accessibilityHidden(true)
+                Text("Shipper")
+                    .font(.headline)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 12)
+            .padding(.bottom, 18)
+        }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
                 Divider()
@@ -332,9 +350,23 @@ struct ProviderRow: View {
             }
             .padding(.vertical, 2)
         } icon: {
-            Image(systemName: provider.isIndividual ? "person" : "building.2")
+            ProviderIcon(systemName: provider.isIndividual ? "person.fill" : "building.2.fill")
         }
         .help("\(provider.isIndividual ? "Individual" : "Organization") · Team ID \(provider.teamID)\nProvider ID \(provider.publicID)")
+    }
+}
+
+/// A developer account's glyph in a rounded tile, so individuals and organizations read apart at a glance.
+struct ProviderIcon: View {
+    let systemName: String
+
+    var body: some View {
+        Image(systemName: systemName)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .frame(width: 24, height: 24)
+            .background(Color.secondary.opacity(0.14), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .accessibilityHidden(true)
     }
 }
 
