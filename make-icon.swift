@@ -1,7 +1,7 @@
 // Draws AppIcon.icns: blue rounded square with a white upload button. Run: swift make-icon.swift
 import AppKit
 
-let iconset = URL(fileURLWithPath: "build/AppIcon.iconset")
+let iconset = URL(fileURLWithPath: "build.noindex/AppIcon.iconset")
 try? FileManager.default.removeItem(at: iconset)
 try! FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)
 

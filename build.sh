@@ -1,10 +1,10 @@
 #!/bin/sh
-# Builds build/Shipper.app (universal, ad-hoc signed, hardened runtime) and Shipper.dmg from the Swift package.
+# Builds build.noindex/Shipper.app (universal, ad-hoc signed, hardened runtime) and Shipper.dmg from the Swift package.
 set -e
 cd "$(dirname "$0")"
 ARCHS="--arch arm64 --arch x86_64"
 swift build -c release $ARCHS
-APP="build/Shipper.app"
+APP="build.noindex/Shipper.app"  # .noindex: Spotlight skips it, so only the installed copy shows up in search
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$(swift build -c release $ARCHS --show-bin-path)/Shipper" "$APP/Contents/MacOS/"
@@ -40,7 +40,7 @@ codesign --force --options runtime --keychain "$KC" --sign "Shipper Self-Signed"
 echo "Built $APP"
 
 # Drag-to-install disk image: the app next to an Applications shortcut.
-STAGE="build/dmg"
+STAGE="build.noindex/dmg"
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
 cp -R "$APP" "$STAGE/"

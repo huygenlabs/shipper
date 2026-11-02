@@ -107,7 +107,7 @@ takes an app-specific password instead. You can revoke one at any time at
 git clone https://github.com/huygenlabs/shipper.git
 cd shipper
 swift test        # parsing and security checks
-./build.sh        # build/Shipper.app (universal) and Shipper.dmg
+./build.sh        # build.noindex/Shipper.app (universal) and Shipper.dmg
 ```
 
 On first run `build.sh` creates a self-signed code-signing certificate in its own keychain at
@@ -122,7 +122,7 @@ same certificate, so release builds must come from the machine that holds the si
 `~/Library/Application Support/Shipper/signing/`; without it, installed copies can't update automatically.
 
 `make-icon.swift` redraws the app icon:
-`swift make-icon.swift && iconutil -c icns build/AppIcon.iconset -o AppIcon.icns`.
+`swift make-icon.swift && iconutil -c icns build.noindex/AppIcon.iconset -o AppIcon.icns`.
 
 ## How it works
 
