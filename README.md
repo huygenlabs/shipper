@@ -56,7 +56,7 @@ can't reveal a tampered repo. If that matters to you, build from source instead.
 
 ```sh
 shasum -a 256 ~/Downloads/Shipper.dmg
-# b1082c9db1ab971c6630f6bb3db505e4ab1e3fd5c67152cac4e912956b6c1137
+# 0ad887f9027889752c479a2b847c6eef55b693ca84ed1f4be9ba6322c9b9e415
 ```
 
 ## Use

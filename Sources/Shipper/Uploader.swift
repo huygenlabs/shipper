@@ -436,7 +436,7 @@ final class Store {
             // A delivered row is history: a newer build exported to the same path is a new job.
             && !jobs.contains(where: { $0.url == url && $0.target == target && $0.state != .delivered }) {
             let job = Job(url: url, target: target)
-            jobs.append(job)
+            jobs.insert(job, at: 0)  // newest on top
             start(job, deliver: false)  // verify on add; Deliver unlocks once it passes
             Task.detached {
                 let info = PackageInfo.read(url)

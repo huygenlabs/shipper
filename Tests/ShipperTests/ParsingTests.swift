@@ -119,6 +119,7 @@ import Testing
     relaunched.selection = target
     relaunched.add([url])
     #expect(relaunched.jobs.count == 2)
+    #expect(relaunched.jobs.last?.state == .delivered)  // newest added sits on top
     relaunched.clear()
     #expect(relaunched.jobs.isEmpty)
     #expect(Store().jobs.isEmpty)
