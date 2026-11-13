@@ -27,6 +27,8 @@ file in, and Shipper verifies it on its own. When verification passes, a **Deliv
   message, which you can select or copy.
 - Per-build log, Stop, Show in Finder.
 - Open `.ipa` and `.pkg` files from Finder with Shipper.
+- **Works with AI agents.** Claude Code, Cursor and other MCP clients can upload a build to a team by its
+  Team ID. See [Use with AI agents](#use-with-ai-agents).
 - **Updates itself.** At launch and once a day Shipper checks this repo for a newer version, downloads it in
   the background and installs it when you quit, or right away with **Relaunch Now**. An update is installed
   only if it's signed by the same certificate as the copy you're running. **Shipper → Check for Updates…**
@@ -56,7 +58,7 @@ can't reveal a tampered repo. If that matters to you, build from source instead.
 
 ```sh
 shasum -a 256 ~/Downloads/Shipper.dmg
-# 0ad887f9027889752c479a2b847c6eef55b693ca84ed1f4be9ba6322c9b9e415
+# 38566149d3d6bdd15ac0f07887a9f92ef244431f1887576df2ab1deb0ed02541
 ```
 
 ## Use
@@ -68,6 +70,62 @@ shasum -a 256 ~/Downloads/Shipper.dmg
 
 The first time Shipper reads its saved password, macOS asks for your Mac password. Click **Always Allow** and it
 won't ask again, including after updates.
+
+### Use with AI agents
+
+Shipper is also an [MCP](https://modelcontextprotocol.io) server, so an agent can upload the build it just
+made. MCP has no system-wide registry: every agent keeps its own list of servers, so Shipper has to be added
+to each one.
+
+**Connect AI Agents…**, at the bottom of the sidebar and in the Shipper menu, has a switch for each agent it
+finds on your Mac. Turning one on adds Shipper to that agent's MCP servers; turning it off takes it out.
+Restart the agent afterwards.
+
+| Agent | What the switch changes |
+|---|---|
+| Claude Code | runs `claude mcp add --scope user` (`~/.claude.json`) |
+| Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Cursor | `~/.cursor/mcp.json` |
+| Codex | `~/.codex/config.toml` |
+| Antigravity | `~/.gemini/config/mcp_config.json` |
+| VS Code | `~/Library/Application Support/Code/User/mcp.json` |
+| Windsurf | `~/.codeium/windsurf/mcp_config.json` |
+| Gemini CLI | `~/.gemini/settings.json` |
+
+Only Shipper's own entry is written or removed; the rest of the file is kept. A JSON config with comments is
+left alone, because writing it back would lose them: add Shipper by hand instead.
+
+**ChatGPT and Claude in a browser can't use it.** They only connect to servers on the internet, and the
+build and your passwords are on your Mac. Codex is the OpenAI agent that can.
+
+For any other agent, or by hand:
+
+```sh
+claude mcp add --scope user shipper -- /Applications/Shipper.app/Contents/MacOS/Shipper --mcp
+```
+
+```json
+{
+  "mcpServers": {
+    "shipper": {
+      "command": "/Applications/Shipper.app/Contents/MacOS/Shipper",
+      "args": ["--mcp"]
+    }
+  }
+}
+```
+
+| Tool | What it does |
+|---|---|
+| `list_teams` | The teams Shipper is signed in to, with their Team IDs. |
+| `upload_build` | Uploads the `.ipa` or `.pkg` at `path` for `team_id`. `verify_only` validates without uploading. |
+| `list_builds` | The queue: state, progress, delivery ID and errors of each build. |
+
+Sign in to your Apple Accounts in Shipper first. When an agent uploads, Shipper opens in the background and
+the build appears in its queue like one you dropped in, with the same progress, log and Stop button. A team
+that several of your Apple Accounts belong to is uploaded with the account selected in the sidebar if it has
+that team, otherwise the first that does. If the agent stops waiting, the upload carries on; `list_builds`
+tells it how the upload ended.
 
 ### Why an app-specific password?
 
@@ -91,6 +149,14 @@ takes an app-specific password instead. You can revoke one at any time at
   or repo can't install an app signed by someone else. Shipper replaces itself only where you put it, and
   only when it can write there; otherwise it offers the download instead. Turn updates off with
   **Shipper → Install Updates Automatically**.
+- **AI agents:** `Shipper --mcp` talks to the app over a Unix socket in
+  `~/Library/Application Support/Shipper/` that only your user can open; the app also checks that the caller
+  runs as you. Agents see team names, Team IDs and builds, never passwords or Apple Account emails, and can
+  only queue `.ipa` and `.pkg` files given by absolute path. Be aware of what this allows: any program already
+  running as you can ask Shipper to upload a build with your signed-in accounts, without a prompt. It can't
+  read the passwords. Uploads always show in Shipper's queue, and a delivered build can't be deleted from
+  App Store Connect, only expired. Shipper changes an agent's config file only when you flip that agent's
+  switch in **Connect AI Agents…**.
 - **Stored settings** (`~/Library/Preferences/io.github.huygenlabs.shipper.plist`): signed-in Apple Account
   emails, developer account names and IDs, and the last selection. No passwords.
 - **Builds you add** are read with `/usr/bin/tar` to show their version and bundle ID. Reads are capped at
@@ -136,7 +202,8 @@ Transporter's upload engine is Apple's `ContentDelivery.framework`. Xcode ships 
 | Deliver | `--upload-package <file> --provider-public-id <id>` |
 
 Code: `Sources/Shipper/Uploader.swift` (accounts, Keychain, altool, archive reading) and
-`Sources/Shipper/App.swift` (UI), `Sources/Shipper/Updater.swift` (update check).
+`Sources/Shipper/App.swift` (UI), `Sources/Shipper/Updater.swift` (update check), `Sources/Shipper/MCP.swift`
+(MCP server for AI agents and the socket it reaches the app through).
 
 ## License
 

@@ -83,6 +83,22 @@ struct Target: Codable, Hashable {
     var publicID: String?
 }
 
+extension [Account] {
+    /// The account and team to deliver for when only a Team ID is given, as agents do. A team several signed-in
+    /// accounts share goes to `preferred` (the account selected in the sidebar) when it has it, else the first.
+    func target(forTeam teamID: String, preferring preferred: String? = nil) -> Target? {
+        let teamID = teamID.trimmingCharacters(in: .whitespaces).uppercased()
+        guard !teamID.isEmpty else { return nil }  // providers listed without a Team ID must never match
+        let ordered = filter { $0.appleID == preferred } + filter { $0.appleID != preferred }
+        for account in ordered {
+            if let provider = account.providers.first(where: { $0.teamID.uppercased() == teamID }) {
+                return Target(appleID: account.appleID, publicID: provider.publicID)
+            }
+        }
+        return nil
+    }
+}
+
 enum Keychain {
     private static func query(_ account: String, service: String = "Shipper") -> [CFString: Any] {
         [kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: account]
@@ -254,7 +270,7 @@ struct PackageInfo: Codable, Equatable {
 
 @Observable @MainActor
 final class Job: Identifiable {
-    enum State { case ready, verifying, delivering, verified, delivered, failed, stopped }
+    enum State: String { case ready, verifying, delivering, verified, delivered, failed, stopped }
 
     let id = UUID()
     let url: URL
@@ -335,6 +351,8 @@ final class Store {
     var refreshErrors: [String: String] = [:]
     /// Apple IDs whose teams are being fetched right now.
     var refreshing: Set<String> = []
+    /// Shows the Connect AI Agents sheet; set from the app menu.
+    var showsAgentSetup = false
 
     init() {
         let defaults = UserDefaults.standard
@@ -433,16 +451,25 @@ final class Store {
     func add(_ urls: [URL]) {
         guard let target = selection else { return }
         for url in urls where url.isFileURL && ["ipa", "pkg"].contains(url.pathExtension.lowercased())
-            // A delivered row is history: a newer build exported to the same path is a new job.
-            && !jobs.contains(where: { $0.url == url && $0.target == target && $0.state != .delivered }) {
-            let job = Job(url: url, target: target)
-            jobs.insert(job, at: 0)  // newest on top
-            start(job, deliver: false)  // verify on add; Deliver unlocks once it passes
-            Task.detached {
-                let info = PackageInfo.read(url)
-                await MainActor.run { job.info = info }
-            }
+            && unfinished(url, target) == nil {
+            start(enqueue(url, target), deliver: false)  // verify on add; Deliver unlocks once it passes
         }
+    }
+
+    /// The queued job for this file and team, if any. A delivered row is history: a newer build exported to the
+    /// same path is a new job.
+    func unfinished(_ url: URL, _ target: Target) -> Job? {
+        jobs.first { $0.url == url && $0.target == target && $0.state != .delivered }
+    }
+
+    func enqueue(_ url: URL, _ target: Target) -> Job {
+        let job = Job(url: url, target: target)
+        jobs.insert(job, at: 0)  // newest on top
+        Task.detached {
+            let info = PackageInfo.read(url)
+            await MainActor.run { job.info = info }
+        }
+        return job
     }
 
     func openPanel() {

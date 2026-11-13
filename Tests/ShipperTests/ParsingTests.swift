@@ -164,3 +164,135 @@ import Testing
     #expect(PackageInfo.iconPath(plist, in: entries, app: "Payload/Runner.app/") == "Payload/Runner.app/AppIcon76x76@2x~ipad.png")
     #expect(PackageInfo.iconPath([:], in: entries, app: "Payload/Runner.app/") == nil)
 }
+
+// MARK: - Agents (MCP)
+
+@Test func picksTheAccountForATeamID() {
+    func provider(_ team: String, _ id: String) -> Provider { Provider(name: team, shortName: "", publicID: id, teamID: team) }
+    let accounts = [
+        Account(appleID: "asha@example.com", providers: [provider("A1B2C3D4E5", "p-1"), provider("", "p-2")]),
+        Account(appleID: "ravi@example.com", providers: [provider("A1B2C3D4E5", "p-3"), provider("Z9Y8X7W6V5", "p-4")]),
+    ]
+    // A team two accounts share goes to the first, unless the other is the one selected in the sidebar.
+    #expect(accounts.target(forTeam: "A1B2C3D4E5") == Target(appleID: "asha@example.com", publicID: "p-1"))
+    #expect(accounts.target(forTeam: "a1b2c3d4e5 ", preferring: "ravi@example.com") == Target(appleID: "ravi@example.com", publicID: "p-3"))
+    #expect(accounts.target(forTeam: "Z9Y8X7W6V5", preferring: "asha@example.com") == Target(appleID: "ravi@example.com", publicID: "p-4"))
+    #expect(accounts.target(forTeam: "NOSUCHTEAM") == nil)
+    // A provider listed without a Team ID must not be picked by an empty one.
+    #expect(accounts.target(forTeam: "") == nil)
+    #expect(accounts.teamID(of: Target(appleID: "ravi@example.com", publicID: "p-4")) == "Z9Y8X7W6V5")
+}
+
+@Test func refusesPathsAnAgentShouldNotUpload() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir.appendingPathComponent("Folder.ipa"), withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let build = dir.appendingPathComponent("Demo.IPA"), notes = dir.appendingPathComponent("notes.txt")
+    try Data().write(to: build)
+    try Data().write(to: notes)
+    #expect(Agent.pathError(build.path) == nil)
+    #expect(Agent.pathError("Demo.ipa") != nil)  // relative
+    #expect(Agent.pathError(notes.path) != nil)  // not a build
+    #expect(Agent.pathError(dir.appendingPathComponent("Missing.ipa").path) != nil)
+    #expect(Agent.pathError(dir.appendingPathComponent("Folder.ipa").path) != nil)  // a directory
+}
+
+@Test func answersTheMCPHandshake() throws {
+    let hello = try #require(MCPServer.reply(to: ["jsonrpc": "2.0", "id": 1, "method": "initialize", "params": ["protocolVersion": "2025-03-26"]]))
+    let result = try #require(hello["result"] as? [String: Any])
+    #expect(result["protocolVersion"] as? String == "2025-03-26")
+    #expect((result["capabilities"] as? [String: Any])?["tools"] != nil)
+    // A revision it has never heard of gets one it knows.
+    let future = MCPServer.reply(to: ["id": 2, "method": "initialize", "params": ["protocolVersion": "2099-01-01"]])
+    #expect((future?["result"] as? [String: Any])?["protocolVersion"] as? String == "2025-06-18")
+
+    let listed = MCPServer.reply(to: ["id": 3, "method": "tools/list"])?["result"] as? [String: Any]
+    let names = (listed?["tools"] as? [[String: Any]])?.compactMap { $0["name"] as? String }
+    #expect(names == ["list_teams", "upload_build", "list_builds"])
+
+    #expect(MCPServer.reply(to: ["method": "notifications/initialized"]) == nil)  // notifications get no reply
+    #expect((MCPServer.reply(to: ["id": 4, "method": "resources/list"])?["error"] as? [String: Any])?["code"] as? Int == -32601)
+    #expect(Agent.shellQuoted("/Applications/Shipper.app/Contents/MacOS/Shipper") == "/Applications/Shipper.app/Contents/MacOS/Shipper")
+    #expect(Agent.shellQuoted("/Users/it's me/Shipper") == #"'/Users/it'\''s me/Shipper'"#)
+}
+
+@Test func addsShipperToAJSONConfigAndKeepsTheRest() throws {
+    let existing = Data(#"{"theme": "dark", "mcpServers": {"figma": {"url": "https://example.com/mcp"}}}"#.utf8)
+    let entry: [String: Any] = ["command": "/Applications/Shipper.app/Contents/MacOS/Shipper", "args": ["--mcp"]]
+    let added = try AgentApp.json(existing, key: "mcpServers", entry: entry)
+    let root = try #require(JSONSerialization.jsonObject(with: added) as? [String: Any])
+    #expect(root["theme"] as? String == "dark")
+    #expect((root["mcpServers"] as? [String: Any])?["figma"] != nil)
+    #expect(AgentApp.command(inJSON: added, key: "mcpServers") == "/Applications/Shipper.app/Contents/MacOS/Shipper")
+    #expect(String(decoding: added, as: UTF8.self).contains("/Applications/Shipper.app"))  // slashes left readable
+
+    let removed = try AgentApp.json(added, key: "mcpServers", entry: nil)
+    #expect(AgentApp.command(inJSON: removed, key: "mcpServers") == nil)
+    #expect(String(decoding: removed, as: UTF8.self).contains("figma"))
+
+    // No file yet, or an empty one, starts a new config.
+    #expect(AgentApp.command(inJSON: try AgentApp.json(nil, key: "servers", entry: entry), key: "servers") != nil)
+    #expect(AgentApp.command(inJSON: try AgentApp.json(Data(" \n".utf8), key: "servers", entry: entry), key: "servers") != nil)
+    // A file with comments is refused, not rewritten without them.
+    #expect(throws: AgentApp.Failure.self) { try AgentApp.json(Data("{ // mine\n \"servers\": {} }".utf8), key: "servers", entry: entry) }
+    #expect(throws: AgentApp.Failure.self) { try AgentApp.json(Data(#"{"servers": []}"#.utf8), key: "servers", entry: entry) }
+}
+
+@Test func addsShipperToCodexConfigAndKeepsTheRest() {
+    let existing = """
+        model = "gpt-5"
+
+        [mcp_servers.dart]
+        command = "dart"
+        args = [
+            "mcp-server",
+        ]
+
+        [mcp_servers.dart.env]
+        FOO = "1"
+        """
+    let added = AgentApp.toml(existing, command: "/Applications/Shipper.app/Contents/MacOS/Shipper")
+    #expect(added == existing + "\n\n[mcp_servers.shipper]\ncommand = \"/Applications/Shipper.app/Contents/MacOS/Shipper\"\nargs = [\"--mcp\"]\n")
+    #expect(AgentApp.isInTOML(added, command: "/Applications/Shipper.app/Contents/MacOS/Shipper"))
+    #expect(!AgentApp.isInTOML(added, command: "/Users/asha/Shipper.app/Contents/MacOS/Shipper"))  // another copy
+    #expect(!AgentApp.isInTOML(existing, command: "dart"))
+
+    // Connecting again from a copy somewhere else replaces the table instead of adding a second one.
+    let moved = AgentApp.toml(added, command: "/Users/asha/Shipper.app/Contents/MacOS/Shipper")
+    #expect(moved.components(separatedBy: "[mcp_servers.shipper]").count == 2)
+    #expect(AgentApp.isInTOML(moved, command: "/Users/asha/Shipper.app/Contents/MacOS/Shipper"))
+
+    // Removing takes out only Shipper's table, wherever it sits.
+    #expect(AgentApp.toml(added, command: nil) == existing + "\n")
+    let middle = "[mcp_servers.shipper]\ncommand = \"x\"\nargs = [\"--mcp\"]\n\n[mcp_servers.dart]\ncommand = \"dart\"\n"
+    #expect(AgentApp.toml(middle, command: nil) == "[mcp_servers.dart]\ncommand = \"dart\"\n")
+    #expect(AgentApp.toml("", command: "/x") == "[mcp_servers.shipper]\ncommand = \"/x\"\nargs = [\"--mcp\"]\n")
+}
+
+@Test func connectingKeepsTheConfigFilePrivateAndLinked() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    // A config kept in a dotfiles repo, readable only by its owner because it holds an API key.
+    let real = dir.appendingPathComponent("dotfiles-mcp.json"), link = dir.appendingPathComponent("mcp.json")
+    try Data(#"{"mcpServers": {"notes": {"command": "notes", "env": {"KEY": "secret"}}}}"#.utf8).write(to: real)
+    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: real.path)
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+
+    let agent = AgentApp(name: "Test", files: [link.path], markers: [], format: .json(key: "mcpServers"))
+    #expect(!agent.isConnected(to: "/x/Shipper"))
+    try agent.setConnected(true, executable: "/x/Shipper")
+    #expect(agent.isConnected(to: "/x/Shipper"))
+    #expect(try FileManager.default.attributesOfItem(atPath: real.path)[.posixPermissions] as? Int == 0o600)
+    #expect(try FileManager.default.destinationOfSymbolicLink(atPath: link.path) == real.path)
+    #expect(String(decoding: try Data(contentsOf: real), as: UTF8.self).contains("secret"))
+    try agent.setConnected(false, executable: "/x/Shipper")
+    #expect(!agent.isConnected(to: "/x/Shipper"))
+
+    // Turning off an agent that has no config yet must not create one.
+    let fresh = AgentApp(name: "Fresh", files: [dir.appendingPathComponent("new/config.toml").path], markers: [], format: .toml)
+    try fresh.setConnected(false, executable: "/x/Shipper")
+    #expect(!FileManager.default.fileExists(atPath: fresh.file.path))
+    try fresh.setConnected(true, executable: "/x/Shipper")
+    #expect(fresh.isConnected(to: "/x/Shipper"))
+}

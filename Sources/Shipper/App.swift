@@ -1,11 +1,23 @@
 import SwiftUI
 
 @main
+enum Main {
+    /// `Shipper --mcp` is the MCP server AI agents start (MCP.swift); anything else is the app.
+    @MainActor static func main() {
+        if CommandLine.arguments.contains("--mcp") { MCPServer.run() }
+        ShipperApp.main()
+    }
+}
+
 struct ShipperApp: App {
     @NSApplicationDelegateAdaptor private var delegate: AppDelegate
     @AppStorage(Updater.autoCheckKey) private var checksForUpdates = true
 
-    init() { Store.moveFromOldName() }
+    init() {
+        Store.moveFromOldName()
+        // Before anything at launch can hold up the main thread, so an agent that just opened Shipper connects at once.
+        AppDelegate.store.listenForAgents()
+    }
 
     var body: some Scene {
         Window("Shipper", id: "main") {
@@ -15,6 +27,8 @@ struct ShipperApp: App {
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") { Task { await Updater.check(userInitiated: true) } }
                 Toggle("Install Updates Automatically", isOn: $checksForUpdates)
+                Divider()
+                Button("Connect AI Agents…") { AppDelegate.store.showsAgentSetup = true }
             }
             CommandGroup(replacing: .newItem) {
                 Button("Add App…") { AppDelegate.store.openPanel() }
@@ -62,6 +76,7 @@ struct ContentView: View {
     @State private var addingAccount = false
 
     var body: some View {
+        @Bindable var store = store
         Group {
             if store.accounts.isEmpty {
                 SignInView()
@@ -79,6 +94,165 @@ struct ContentView: View {
             SignInView(onDone: { addingAccount = false })
                 .padding(.vertical, 28)
                 .frame(width: 420)
+        }
+        .sheet(isPresented: $store.showsAgentSetup) { AgentSetupView() }
+    }
+}
+
+// MARK: - AI agents
+
+/// One switch per agent found on this Mac: on writes Shipper into that agent's MCP servers, off takes it out.
+struct AgentSetupView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var connected: Set<String> = []
+    @State private var busy: Set<String> = []
+    @State private var changed: Set<String> = []
+    @State private var errors: [String: String] = [:]
+    private let executable = Bundle.main.executablePath ?? "/Applications/Shipper.app/Contents/MacOS/Shipper"
+    private let agents = AgentApp.all.filter(\.isInstalled)
+    private let missing = AgentApp.all.filter { !$0.isInstalled }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Connect AI Agents").font(.headline).padding()
+            Divider()
+            VStack(alignment: .leading, spacing: 18) {
+                Text("A connected agent can upload a build to a team by its Team ID. Its uploads appear in this window.")
+                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 6) {
+                    if !agents.isEmpty {
+                        VStack(spacing: 0) {
+                            ForEach(agents) { agent in
+                                if agent.id != agents.first?.id { Divider() }
+                                row(agent)
+                            }
+                        }
+                        .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                        .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(Color(nsColor: .separatorColor)) }
+                    }
+                    if !missing.isEmpty {
+                        Text("Not found on this Mac: \(missing.map(\.name).joined(separator: ", ")).")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                // Closed by default: with every agent installed, the open sheet would outgrow a laptop screen.
+                DisclosureGroup("Add to another agent by hand") {
+                    Snippet(title: "For its MCP config file", text: Self.config(executable))
+                        .padding(.top, 8)
+                }
+                Text("ChatGPT and Claude in a browser only reach servers on the internet, so they can't use builds on this Mac. Any app running as you can use this connection to upload with your signed-in accounts. It can't read your passwords.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding()
+            Divider()
+            HStack {
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+            }
+            .padding()
+        }
+        .frame(width: 580)
+        .onAppear { connected = Set(agents.filter { $0.isConnected(to: executable) }.map(\.id)) }
+    }
+
+    private func row(_ agent: AgentApp) -> some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(agent.name)
+                Text(errors[agent.id] ?? detail(agent))
+                    .font(.caption)
+                    .foregroundStyle(errors[agent.id] == nil ? Color.secondary : Color.red)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+            Spacer(minLength: 8)
+            if busy.contains(agent.id) { ProgressView().controlSize(.small) }
+            Toggle(agent.name, isOn: Binding { connected.contains(agent.id) } set: { set(agent, $0) })
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .disabled(busy.contains(agent.id))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+
+    /// The file the switch changes; once flipped, what's left for the person to do.
+    private func detail(_ agent: AgentApp) -> String {
+        let path = (agent.file.path as NSString).abbreviatingWithTildeInPath
+        guard changed.contains(agent.id) else { return path }
+        return connected.contains(agent.id) ? "Added to \(path). Restart \(agent.name) to load it." : "Removed from \(path)."
+    }
+
+    private func set(_ agent: AgentApp, _ on: Bool) {
+        busy.insert(agent.id)
+        errors[agent.id] = nil
+        Task {
+            let executable = executable
+            let error = await Task.detached { () -> String? in
+                do {
+                    try agent.setConnected(on, executable: executable)
+                    return nil
+                } catch {
+                    return error.localizedDescription
+                }
+            }.value
+            busy.remove(agent.id)
+            errors[agent.id] = error
+            if error == nil { changed.insert(agent.id) }
+            // The switch shows what the agent's config says now, whatever was asked for.
+            if agent.isConnected(to: executable) { connected.insert(agent.id) } else { connected.remove(agent.id) }
+        }
+    }
+
+    static func config(_ executable: String) -> String {
+        """
+        {
+          "mcpServers": {
+            "shipper": {
+              "command": \(Agent.quoted(executable)),
+              "args": ["--mcp"]
+            }
+          }
+        }
+        """
+    }
+}
+
+/// A command or config block to paste elsewhere, with a Copy button that confirms it copied.
+private struct Snippet: View {
+    let title: String
+    let text: String
+    @State private var copied = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(title).font(.callout.weight(.semibold))
+                Spacer()
+                Button(copied ? "Copied" : "Copy") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                    copied = true
+                    Task {
+                        try? await Task.sleep(for: .seconds(1.5))
+                        copied = false
+                    }
+                }
+                .controlSize(.small)
+            }
+            Text(text)
+                .font(.system(.callout, design: .monospaced))
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+                .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(Color(nsColor: .separatorColor)) }
         }
     }
 }
@@ -250,10 +424,17 @@ struct AccountsSidebar: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
                 Divider()
-                Button(action: addAccount) {
-                    Label("Add Account…", systemImage: "plus.circle")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
+                VStack(spacing: 10) {
+                    Button(action: addAccount) {
+                        Label("Add Account…", systemImage: "plus.circle")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    Button { store.showsAgentSetup = true } label: {
+                        Label("Connect AI Agents…", systemImage: "powerplug")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
                 }
                 .buttonStyle(.borderless)
                 .padding(.horizontal, 14)
