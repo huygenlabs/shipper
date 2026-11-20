@@ -391,8 +391,7 @@ struct AccountsSidebar: View {
                                         Button("Copy Provider ID") { copy(provider.publicID) }
                                         Divider()
                                         Button(provider.apiKeyID == nil ? "Add App Store Connect API Key…" : "Manage App Store Connect API Key…") {
-                                            store.apiKeyTarget = Target(appleID: account.appleID, publicID: provider.publicID)
-                                            store.showsAPIKeySetup = true
+                                            store.showAPIKeySetup(for: Target(appleID: account.appleID, publicID: provider.publicID))
                                         }
                                         accountMenu(account)
                                     }
@@ -479,6 +478,7 @@ struct APIKeySetupView: View {
     @State private var keyID = ""
     @State private var issuerID = ""
     @State private var privateKey = ""
+    @State private var hasSavedKey = false
     @State private var error: String?
 
     var body: some View {
@@ -497,7 +497,7 @@ struct APIKeySetupView: View {
                 .font(.callout)
             if let error { Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled) }
             HStack {
-                if store.apiPrivateKey(for: target) != nil {
+                if hasSavedKey {
                     Button("Remove Key", role: .destructive) {
                         store.removeAPIKey(for: target)
                         dismiss()
@@ -518,7 +518,9 @@ struct APIKeySetupView: View {
                 keyID = provider.apiKeyID ?? ""
                 issuerID = provider.apiIssuerID ?? ""
             }
-            privateKey = store.apiPrivateKey(for: target) ?? ""
+            let savedKey = store.apiPrivateKey(for: target)
+            hasSavedKey = savedKey != nil
+            privateKey = savedKey ?? ""
         }
     }
 
@@ -630,10 +632,22 @@ struct QueueView: View {
             if store.selection == nil {
                 Text("Select a developer account").foregroundStyle(.secondary)
             } else if jobs.isEmpty {
-                emptyState
+                VStack(spacing: 0) {
+                    if let target = store.selection, store.shouldShowAPIKeyNotice(for: target) {
+                        APIKeySetupNotice(target: target)
+                    }
+                    emptyState
+                }
             } else {
-                List(jobs) { job in
-                    JobRow(job: job) { logJob = job }
+                List {
+                    if let target = store.selection, store.shouldShowAPIKeyNotice(for: target) {
+                        APIKeySetupNotice(target: target)
+                            .listRowInsets(EdgeInsets())
+                            .listRowSeparator(.hidden)
+                    }
+                    ForEach(jobs) { job in
+                        JobRow(job: job) { logJob = job }
+                    }
                 }
                 .listStyle(.inset)
             }
@@ -681,6 +695,48 @@ struct QueueView: View {
                 .strokeBorder(.quaternary, style: StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
                 .padding(20)
         }
+    }
+}
+
+private struct APIKeySetupNotice: View {
+    @Environment(Store.self) private var store
+    let target: Target
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "key.fill")
+                .foregroundStyle(Color.accentColor)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Track Apple's processing")
+                    .font(.callout.weight(.semibold))
+                Text("Your Apple login lets Shipper validate and upload. Apple requires a separate team API key to read processing results after upload. Its .p8 file signs those read-only requests and stays in your Mac's Keychain.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Set Up API Key…") { store.showAPIKeySetup(for: target) }
+                    .controlSize(.small)
+                    .padding(.top, 2)
+            }
+            Spacer(minLength: 4)
+            Button {
+                store.dismissAPIKeyNotice(for: target)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Dismiss for this team")
+            .accessibilityLabel("Dismiss API key explanation")
+        }
+        .padding(12)
+        .background(Color.accentColor.opacity(0.07), in: RoundedRectangle(cornerRadius: 9))
+        .overlay { RoundedRectangle(cornerRadius: 9).strokeBorder(Color.accentColor.opacity(0.18)) }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
     }
 }
 

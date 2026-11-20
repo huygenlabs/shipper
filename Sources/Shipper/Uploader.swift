@@ -362,10 +362,14 @@ final class Store {
     var showsAgentSetup = false
     var apiKeyTarget: Target?
     var showsAPIKeySetup = false
+    var dismissedAPIKeyNotices: Set<String> = [] {
+        didSet { UserDefaults.standard.set(Array(dismissedAPIKeyNotices), forKey: "dismissedAPIKeyNotices") }
+    }
 
     init() {
         let defaults = UserDefaults.standard
         accounts = defaults.data(forKey: "accounts").flatMap { try? JSONDecoder().decode([Account].self, from: $0) } ?? []
+        dismissedAPIKeyNotices = Set(defaults.stringArray(forKey: "dismissedAPIKeyNotices") ?? [])
         // Team lists change rarely but do change (new teams, renamed companies), so re-read them each launch.
         for account in accounts {
             Task { await refresh(account.appleID) }
@@ -387,6 +391,22 @@ final class Store {
     func apiPrivateKey(for target: Target) -> String? {
         guard let teamID = accounts.teamID(of: target) else { return nil }
         return Keychain.load(apiKeychainAccount(target.appleID, teamID), service: "Shipper ASC API")
+    }
+
+    func shouldShowAPIKeyNotice(for target: Target) -> Bool {
+        guard let teamID = accounts.teamID(of: target), !teamID.isEmpty,
+              let provider = accounts.first(where: { $0.appleID == target.appleID })?.providers.first(where: { $0.publicID == target.publicID }) else { return false }
+        return (provider.apiKeyID == nil || provider.apiIssuerID == nil) && !dismissedAPIKeyNotices.contains(teamID)
+    }
+
+    func dismissAPIKeyNotice(for target: Target) {
+        guard let teamID = accounts.teamID(of: target), !teamID.isEmpty else { return }
+        dismissedAPIKeyNotices.insert(teamID)
+    }
+
+    func showAPIKeySetup(for target: Target) {
+        apiKeyTarget = target
+        showsAPIKeySetup = true
     }
 
     func saveAPIKey(for target: Target, keyID: String, issuerID: String, privateKey: String) -> String? {
@@ -412,6 +432,7 @@ final class Store {
         Keychain.delete(apiKeychainAccount(target.appleID, teamID), service: "Shipper ASC API")
         accounts[accountIndex].providers[providerIndex].apiKeyID = nil
         accounts[accountIndex].providers[providerIndex].apiIssuerID = nil
+        if let teamID = accounts.teamID(of: target) { dismissedAPIKeyNotices.remove(teamID) }
     }
 
     /// Shipper 1.1 and older were saved as "AppUploader". Moves their settings and passwords over once, then deletes
