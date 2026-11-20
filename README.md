@@ -22,6 +22,9 @@ file in, and Shipper verifies it on its own. When verification passes, a **Deliv
   shows in its account menu. Select one to see and add only that team's builds. The selection is remembered.
 - **Verify on add.** Dropping a build starts `altool --validate-app` right away with a progress bar.
   **Deliver** (`altool --upload-package`) is offered only after verification passes.
+- **Track Apple's processing.** Add an App Store Connect API key for each developer team and Shipper checks whether Apple
+  accepts or rejects each upload. Processing failures appear in the queue and as a macOS notification. Without an
+  API key, Shipper reports that the upload completed but processing could not be checked.
 - Version, build number and bundle ID read straight from the `.ipa` or `.pkg`.
 - When verification or delivery fails, a one-line error appears under the build. **Details** expands the full
   message, which you can select or copy.
@@ -58,7 +61,7 @@ can't reveal a tampered repo. If that matters to you, build from source instead.
 
 ```sh
 shasum -a 256 ~/Downloads/Shipper.dmg
-# 38566149d3d6bdd15ac0f07887a9f92ef244431f1887576df2ab1deb0ed02541
+# 74cd4896cc24f90897ce4f08bf06bee2ab705ca91efe01a8b9e8f7481db89b8b
 ```
 
 ## Use
@@ -118,8 +121,8 @@ claude mcp add --scope user shipper -- /Applications/Shipper.app/Contents/MacOS/
 | Tool | What it does |
 |---|---|
 | `list_teams` | The teams Shipper is signed in to, with their Team IDs. |
-| `upload_build` | Uploads the `.ipa` or `.pkg` at `path` for `team_id`. `verify_only` validates without uploading. |
-| `list_builds` | The queue: state, progress, delivery ID and errors of each build. |
+| `upload_build` | Validates the `.ipa` or `.pkg` at `path` for `team_id`, then uploads if validation passes. `verify_only` stops after validation. |
+| `list_builds` | The queue: validation, upload, Apple processing state, progress, delivery ID and errors. |
 
 Sign in to your Apple Accounts in Shipper first. When an agent uploads, Shipper opens in the background and
 the build appears in its queue like one you dropped in, with the same progress, log and Stop button. A team
@@ -134,16 +137,27 @@ by Apple may use it, and Shipper doesn't try to get around that. `altool`, the s
 takes an app-specific password instead. You can revoke one at any time at
 [account.apple.com](https://account.apple.com/account/manage).
 
+### Checking Apple's processing status
+
+Apple's upload command can finish before Apple has processed the build. To have Shipper check the final result,
+open a developer team's context menu in the sidebar and choose **Add App Store Connect API Key…**. Create a team
+API key for that developer account, then enter its Key ID, Issuer ID and `.p8` private key. Shipper stores the private
+key in the macOS Keychain and uses it only to read build status for that team. A rejected build appears as an error and triggers
+a macOS notification. Apple does not expose the detailed processing report through this status endpoint, so open
+the build in App Store Connect for Apple's full error details.
+
 ## Security
 
 - **Passwords** are stored only in your login Keychain. They are handed to `altool` on standard input, so they
   never appear in process arguments (`ps`) or in the environment of any process. If the Keychain has no
   password (or you deny access), Shipper asks you to sign in again instead of trying an empty one, because
   repeated failed logins can lock an Apple Account. Signing out deletes the Keychain item.
-- **Network:** the only requests Shipper makes itself are for updates: plain HTTPS GETs of
+- **Network:** Shipper makes HTTPS requests to GitHub for updates and to App Store Connect to check processing
+  status when you configure an API key. Those status requests send the API token and build metadata to Apple.
+  Uploads and account sign-ins go through Apple's `altool`.
+  Update requests are plain HTTPS GETs of
   [`Info.plist`](https://raw.githubusercontent.com/huygenlabs/shipper/main/Info.plist) and, when it lists a newer
-  version, `Shipper.dmg`, both from this repo. They send nothing about you or your accounts. Everything else
-  goes from Apple's `altool` to Apple.
+  version, `Shipper.dmg`, both from this repo. They send nothing about you or your accounts.
 - **Updates** are checked before they're installed: the new `Shipper.app` must pass the installed copy's code
   signing requirement (same bundle ID, same signing certificate) and be a newer version. A tampered download
   or repo can't install an app signed by someone else. Shipper replaces itself only where you put it, and
@@ -158,7 +172,9 @@ takes an app-specific password instead. You can revoke one at any time at
   App Store Connect, only expired. Shipper changes an agent's config file only when you flip that agent's
   switch in **Connect AI Agents…**.
 - **Stored settings** (`~/Library/Preferences/io.github.huygenlabs.shipper.plist`): signed-in Apple Account
-  emails, developer account names and IDs, and the last selection. No passwords.
+  emails, developer account names and IDs, API Key IDs, Issuer IDs and the last selection. No passwords or private keys.
+- **App Store Connect API keys** are optional and separate from upload passwords. Their `.p8` private key is kept
+  in the login Keychain; Shipper uses it to check processing status and deletes it when you sign out.
 - **Builds you add** are read with `/usr/bin/tar` to show their version and bundle ID. Reads are capped at
   16 MB so a malformed archive can't exhaust memory, and nothing is extracted to disk.
 - **Signing:** the app is signed with a self-signed certificate and the hardened runtime. It is **not notarized**,

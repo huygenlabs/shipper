@@ -15,6 +15,7 @@ struct ShipperApp: App {
 
     init() {
         Store.moveFromOldName()
+        NotificationService.requestAuthorization()
         // Before anything at launch can hold up the main thread, so an agent that just opened Shipper connects at once.
         AppDelegate.store.listenForAgents()
     }
@@ -96,6 +97,9 @@ struct ContentView: View {
                 .frame(width: 420)
         }
         .sheet(isPresented: $store.showsAgentSetup) { AgentSetupView() }
+        .sheet(isPresented: $store.showsAPIKeySetup) {
+            if let target = store.apiKeyTarget { APIKeySetupView(target: target) }
+        }
     }
 }
 
@@ -386,6 +390,10 @@ struct AccountsSidebar: View {
                                         Button("Copy Team ID") { copy(provider.teamID) }.disabled(provider.teamID.isEmpty)
                                         Button("Copy Provider ID") { copy(provider.publicID) }
                                         Divider()
+                                        Button(provider.apiKeyID == nil ? "Add App Store Connect API Key…" : "Manage App Store Connect API Key…") {
+                                            store.apiKeyTarget = Target(appleID: account.appleID, publicID: provider.publicID)
+                                            store.showsAPIKeySetup = true
+                                        }
                                         accountMenu(account)
                                     }
                             } else {
@@ -455,12 +463,69 @@ struct AccountsSidebar: View {
         Button("Copy Apple Account") { copy(account.appleID) }
         Divider()
         Button("Sign Out of \(account.appleID)") { store.signOut(account.appleID) }
-            .disabled(store.jobs.contains { $0.isRunning && $0.target.appleID == account.appleID })
+            .disabled(store.jobs.contains { $0.isPending && $0.target.appleID == account.appleID })
     }
 
     private func copy(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+    }
+}
+
+struct APIKeySetupView: View {
+    @Environment(Store.self) private var store
+    @Environment(\.dismiss) private var dismiss
+    let target: Target
+    @State private var keyID = ""
+    @State private var issuerID = ""
+    @State private var privateKey = ""
+    @State private var error: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("App Store Connect API Key").font(.headline)
+            Text("This team's API key lets Shipper check Apple's processing result after upload. Your existing app-specific password still handles uploads.")
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            TextField("Key ID", text: $keyID)
+            TextField("Issuer ID", text: $issuerID)
+            Text("Private key (.p8)").font(.callout.weight(.medium))
+            TextEditor(text: $privateKey)
+                .font(.system(.caption, design: .monospaced))
+                .frame(height: 120)
+                .overlay { RoundedRectangle(cornerRadius: 6).stroke(Color(nsColor: .separatorColor)) }
+            Link("Create an API key in App Store Connect", destination: URL(string: "https://appstoreconnect.apple.com/access/api")!)
+                .font(.callout)
+            if let error { Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled) }
+            HStack {
+                if store.apiPrivateKey(for: target) != nil {
+                    Button("Remove Key", role: .destructive) {
+                        store.removeAPIKey(for: target)
+                        dismiss()
+                    }
+                }
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Save", action: save)
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(keyID.isEmpty || issuerID.isEmpty || privateKey.isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 500)
+        .onAppear {
+            if let provider = store.accounts.first(where: { $0.appleID == target.appleID })?.providers.first(where: { $0.publicID == target.publicID }) {
+                keyID = provider.apiKeyID ?? ""
+                issuerID = provider.apiIssuerID ?? ""
+            }
+            privateKey = store.apiPrivateKey(for: target) ?? ""
+        }
+    }
+
+    private func save() {
+        error = store.saveAPIKey(for: target, keyID: keyID.trimmingCharacters(in: .whitespacesAndNewlines),
+                                 issuerID: issuerID.trimmingCharacters(in: .whitespacesAndNewlines), privateKey: privateKey)
+        if error == nil { dismiss() }
     }
 }
 
@@ -589,7 +654,7 @@ struct QueueView: View {
             ToolbarItem {
                 Button(action: store.clear) { Label("Clear", systemImage: "clear") }
                     .help("Remove finished builds from this list")
-                    .disabled(!jobs.contains { !$0.isRunning })
+                    .disabled(!jobs.contains { !$0.isPending })
             }
             ToolbarItem(placement: .primaryAction) {
                 Button(action: store.openPanel) { Label("Add App", systemImage: "plus") }
@@ -681,6 +746,12 @@ struct JobRow: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
+        case .processing:
+            Label("Apple is processing this build…", systemImage: "hourglass")
+                .font(.callout).foregroundStyle(.secondary)
+        case .uploaded:
+            Label(job.issue ?? "Uploaded; processing status is not connected", systemImage: "checkmark.circle")
+                .font(.callout).foregroundStyle(.orange)
         case .verified:
             Label("Verified, ready to deliver", systemImage: "checkmark.circle.fill")
                 .font(.callout)
@@ -736,9 +807,15 @@ struct JobRow: View {
 
     /// Verify runs on add; Deliver appears only once the package has passed verification.
     @ViewBuilder private var actions: some View {
-        if job.isRunning {
+        if job.state == .processing {
+            EmptyView()
+        } else if job.isRunning {
             Button("Stop") { store.stop(job) }
-        } else if job.state == .delivered {
+        } else if job.state == .delivered || job.state == .uploaded {
+            if job.state == .uploaded {
+                Button("Check Processing") { store.retryProcessingCheck(job) }
+                    .disabled(job.deliveryID == nil)
+            }
             Button("View Log", action: showLog)
         } else {
             if job.verified {
@@ -756,7 +833,7 @@ struct JobRow: View {
 
     @ViewBuilder private var menuItems: some View {
         Button("View Log", action: showLog).disabled(job.log.isEmpty)
-        Button("Verify Again") { store.start(job, deliver: false) }.disabled(job.isRunning || !job.verified)
+        Button("Verify Again") { store.start(job, deliver: false) }.disabled(job.isPending || !job.verified)
         Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([job.url]) }
         Divider()
         Button("Remove from Queue", role: .destructive) { store.remove(job) }

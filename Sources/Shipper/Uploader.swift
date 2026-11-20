@@ -26,6 +26,8 @@ struct Provider: Codable, Hashable, Identifiable {
     var teamID: String
     /// `INDIVIDUAL` or `COMPANY`; optional so lists saved before it existed still decode.
     var entityType: String?
+    var apiKeyID: String?
+    var apiIssuerID: String?
 
     var id: String { publicID }
     var isIndividual: Bool { entityType == "INDIVIDUAL" }
@@ -104,9 +106,9 @@ enum Keychain {
         [kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: account]
     }
 
-    static func save(_ password: String, for account: String) -> Bool {
-        delete(account)
-        var q = query(account)
+    static func save(_ password: String, for account: String, service: String = "Shipper") -> Bool {
+        delete(account, service: service)
+        var q = query(account, service: service)
         q[kSecValueData] = Data(password.utf8)
         return SecItemAdd(q as CFDictionary, nil) == errSecSuccess
     }
@@ -270,7 +272,7 @@ struct PackageInfo: Codable, Equatable {
 
 @Observable @MainActor
 final class Job: Identifiable {
-    enum State: String { case ready, verifying, delivering, verified, delivered, failed, stopped }
+    enum State: String, Codable { case ready, verifying, delivering, verified, uploaded, processing, delivered, failed, stopped }
 
     let id = UUID()
     let url: URL
@@ -282,11 +284,13 @@ final class Job: Identifiable {
     var log: [String] = []
     var issues: [String] = []
     var deliveryID: String?
+    var issue: String?
     /// Passed `--validate-app`; only then is Deliver offered.
     var verified = false
     @ObservationIgnored var process: Process?
 
     var isRunning: Bool { state == .verifying || state == .delivering }
+    var isPending: Bool { isRunning || state == .processing }
     var name: String { info?.name ?? url.deletingPathExtension().lastPathComponent }
 
     init(url: URL, target: Target) {
@@ -303,9 +307,11 @@ final class Job: Identifiable {
         var info: PackageInfo?
         var deliveryID: String?
         var log: [String]
+        var state: State?
+        var issue: String?
     }
 
-    var saved: Saved { Saved(url: url, target: target, size: size, info: info, deliveryID: deliveryID, log: log) }
+    var saved: Saved { Saved(url: url, target: target, size: size, info: info, deliveryID: deliveryID, log: log, state: state, issue: issue) }
 
     init(delivered saved: Saved) {
         url = saved.url
@@ -314,8 +320,9 @@ final class Job: Identifiable {
         info = saved.info
         deliveryID = saved.deliveryID
         log = saved.log
-        state = .delivered
-        verified = true
+        state = saved.state ?? .delivered
+        issue = saved.issue
+        verified = state == .delivered || state == .uploaded || state == .processing || saved.deliveryID != nil
     }
 
     func handle(_ raw: String) {
@@ -353,6 +360,8 @@ final class Store {
     var refreshing: Set<String> = []
     /// Shows the Connect AI Agents sheet; set from the app menu.
     var showsAgentSetup = false
+    var apiKeyTarget: Target?
+    var showsAPIKeySetup = false
 
     init() {
         let defaults = UserDefaults.standard
@@ -365,11 +374,44 @@ final class Store {
         selection = saved.flatMap { isValid($0) ? $0 : nil } ?? accounts.first?.defaultTarget
         jobs = (defaults.data(forKey: "delivered").flatMap { try? JSONDecoder().decode([Job.Saved].self, from: $0) } ?? [])
             .map { Job(delivered: $0) }
+        for job in jobs where job.state == .processing { monitorProcessing(job) }
     }
 
     private func saveDelivered() {
-        let delivered = jobs.filter { $0.state == .delivered }.map(\.saved)
+        let delivered = jobs.filter { [.uploaded, .processing, .delivered, .failed].contains($0.state) && $0.deliveryID != nil }.map(\.saved)
         UserDefaults.standard.set(try? JSONEncoder().encode(delivered), forKey: "delivered")
+    }
+
+    private func apiKeychainAccount(_ appleID: String, _ teamID: String) -> String { "\(appleID)|\(teamID)" }
+
+    func apiPrivateKey(for target: Target) -> String? {
+        guard let teamID = accounts.teamID(of: target) else { return nil }
+        return Keychain.load(apiKeychainAccount(target.appleID, teamID), service: "Shipper ASC API")
+    }
+
+    func saveAPIKey(for target: Target, keyID: String, issuerID: String, privateKey: String) -> String? {
+        guard let accountIndex = accounts.firstIndex(where: { $0.appleID == target.appleID }),
+              let providerIndex = accounts[accountIndex].providers.firstIndex(where: { $0.publicID == target.publicID }),
+              let teamID = accounts.teamID(of: target) else { return "Developer account not found." }
+        guard !keyID.isEmpty, !issuerID.isEmpty, privateKey.contains("BEGIN PRIVATE KEY") else {
+            return "Enter the Key ID, Issuer ID, and a .p8 private key."
+        }
+        guard ASCStatus.validPrivateKey(privateKey) else { return "This .p8 private key is not a valid App Store Connect signing key." }
+        guard Keychain.save(privateKey, for: apiKeychainAccount(target.appleID, teamID), service: "Shipper ASC API") else {
+            return "The API key couldn't be saved to the Keychain."
+        }
+        accounts[accountIndex].providers[providerIndex].apiKeyID = keyID
+        accounts[accountIndex].providers[providerIndex].apiIssuerID = issuerID
+        return nil
+    }
+
+    func removeAPIKey(for target: Target) {
+        guard let accountIndex = accounts.firstIndex(where: { $0.appleID == target.appleID }),
+              let providerIndex = accounts[accountIndex].providers.firstIndex(where: { $0.publicID == target.publicID }),
+              let teamID = accounts.teamID(of: target) else { return }
+        Keychain.delete(apiKeychainAccount(target.appleID, teamID), service: "Shipper ASC API")
+        accounts[accountIndex].providers[providerIndex].apiKeyID = nil
+        accounts[accountIndex].providers[providerIndex].apiIssuerID = nil
     }
 
     /// Shipper 1.1 and older were saved as "AppUploader". Moves their settings and passwords over once, then deletes
@@ -404,7 +446,8 @@ final class Store {
         let (providers, error) = await fetchProviders(appleID, password: password)
         if let error { return error }
         guard Keychain.save(password, for: appleID) else { return "Signed in, but the password couldn't be saved to the Keychain." }
-        let account = Account(appleID: appleID, providers: providers)
+        let oldProviders = accounts.first(where: { $0.appleID == appleID })?.providers ?? []
+        let account = Account(appleID: appleID, providers: preservingAPIKeys(in: providers, from: oldProviders))
         if let i = accounts.firstIndex(where: { $0.appleID == appleID }) { accounts[i] = account } else { accounts.append(account) }
         selection = account.defaultTarget
         return nil
@@ -423,7 +466,7 @@ final class Store {
         refreshing.remove(appleID)
         refreshErrors[appleID] = error
         guard error == nil, let i = accounts.firstIndex(where: { $0.appleID == appleID }) else { return }
-        accounts[i].providers = providers
+        accounts[i].providers = preservingAPIKeys(in: providers, from: accounts[i].providers)
         if let current = selection, current.appleID == appleID, !isValid(current) { selection = accounts[i].defaultTarget }
     }
 
@@ -438,10 +481,25 @@ final class Store {
         return (Provider.parse(output.joined(separator: "\n")), nil)
     }
 
+    private func preservingAPIKeys(in providers: [Provider], from old: [Provider]) -> [Provider] {
+        providers.map { provider in
+            guard let saved = old.first(where: { $0.publicID == provider.publicID }) else { return provider }
+            var updated = provider
+            updated.apiKeyID = saved.apiKeyID
+            updated.apiIssuerID = saved.apiIssuerID
+            return updated
+        }
+    }
+
     func signOut(_ appleID: String) {
         for job in jobs where job.target.appleID == appleID { stop(job) }
         jobs.removeAll { $0.target.appleID == appleID }
         Keychain.delete(appleID)
+        for provider in accounts.first(where: { $0.appleID == appleID })?.providers ?? [] {
+            if !provider.teamID.isEmpty {
+                Keychain.delete(apiKeychainAccount(appleID, provider.teamID), service: "Shipper ASC API")
+            }
+        }
         accounts.removeAll { $0.appleID == appleID }
         if selection?.appleID == appleID { selection = accounts.first?.defaultTarget }
     }
@@ -481,11 +539,13 @@ final class Store {
 
     /// Verify runs `--validate-app`; Deliver runs `--upload-package`, matching Transporter's two actions.
     func start(_ job: Job, deliver: Bool) {
-        guard !job.isRunning else { return }
+        guard !job.isPending else { return }
         let appleID = job.target.appleID
         guard let password = Keychain.load(appleID) else {
             job.state = .failed
             job.issues = [Self.missingPassword]
+            job.issue = Self.missingPassword
+            NotificationService.failure(job, message: Self.missingPassword)
             return
         }
         job.state = deliver ? .delivering : .verifying
@@ -493,6 +553,7 @@ final class Store {
         job.log = []
         job.issues = []
         job.deliveryID = nil
+        job.issue = nil
         if !deliver { job.verified = false }
         let process = Process()
         job.process = process
@@ -502,17 +563,90 @@ final class Store {
             let status = await Altool.run(args, password: password, process: process) { job.handle($0) }
             job.process = nil
             guard job.state != .stopped else { return }
-            job.state = status == 0 ? (deliver ? .delivered : .verified) : .failed
+            job.state = status == 0 ? (deliver ? .uploaded : .verified) : .failed
             if status == 0, !deliver { job.verified = true }
             if status != 0, job.issues.isEmpty { job.issues = ["altool exited with code \(status) without an error message. See the full log."] }
+            if status != 0 {
+                let message = Altool.headline(job.issues) ?? "Upload failed. See the full log."
+                job.issue = message
+                NotificationService.failure(job, message: message)
+            }
             saveDelivered()
+            if status == 0, deliver {
+                guard job.deliveryID != nil else {
+                    job.state = .uploaded
+                    job.issue = "Upload complete, but Apple did not return an upload ID to check processing status."
+                    saveDelivered()
+                    return
+                }
+                job.state = .processing
+                saveDelivered()
+                monitorProcessing(job)
+            }
         }
     }
 
+    private func monitorProcessing(_ job: Job) {
+        guard let account = accounts.first(where: { $0.appleID == job.target.appleID }),
+              let provider = account.providers.first(where: { $0.publicID == job.target.publicID }),
+              let keyID = provider.apiKeyID, let issuerID = provider.apiIssuerID,
+              let privateKey = apiPrivateKey(for: job.target) else {
+            job.state = .uploaded
+            job.issue = "Upload complete. Add an App Store Connect API key to check Apple's processing status."
+            saveDelivered()
+            return
+        }
+        Task {
+            let deadline = Date().addingTimeInterval(24 * 60 * 60)
+            var sawProcessing = false
+            while job.state == .processing, Date() < deadline {
+                if let result = await ASCStatus.check(info: job.info, keyID: keyID, issuerID: issuerID, privateKey: privateKey) {
+                    guard job.state == .processing else { return }
+                    switch result {
+                    case .valid:
+                        job.state = .delivered
+                        job.issue = nil
+                        saveDelivered()
+                        return
+                    case .failed(let reason):
+                        job.state = .failed
+                        job.issue = reason
+                        job.issues.append(reason)
+                        saveDelivered()
+                        NotificationService.failure(job, message: reason)
+                        return
+                    case .processing:
+                        sawProcessing = true
+                    }
+                }
+                try? await Task.sleep(for: .seconds(30))
+            }
+            if job.state == .processing {
+                job.state = .failed
+                job.issue = sawProcessing
+                    ? "Apple is still processing this build after 24 hours. Check its upload status in App Store Connect."
+                    : "Shipper couldn't confirm Apple's processing status for 24 hours. Check the API key and your connection, then check the build in App Store Connect."
+                let message = job.issue ?? "Apple processing failed. Check App Store Connect for details."
+                job.issues.append(message)
+                saveDelivered()
+                NotificationService.failure(job, message: message)
+            }
+        }
+    }
+
+    func retryProcessingCheck(_ job: Job) {
+        guard job.state == .uploaded, job.deliveryID != nil else { return }
+        job.issue = nil
+        job.state = .processing
+        saveDelivered()
+        monitorProcessing(job)
+    }
+
     func stop(_ job: Job) {
-        guard job.isRunning else { return }
+        guard job.isPending else { return }
         job.state = .stopped
         job.process?.terminate()
+        saveDelivered()
     }
 
     func remove(_ job: Job) {
@@ -522,6 +656,6 @@ final class Store {
 
     /// Empties the selected account's list, leaving uploads that are still running.
     func clear() {
-        jobs.removeAll { !$0.isRunning && $0.target == selection }
+        jobs.removeAll { !$0.isPending && $0.target == selection }
     }
 }

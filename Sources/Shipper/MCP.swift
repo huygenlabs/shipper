@@ -179,9 +179,12 @@ extension Store {
         let url = URL(fileURLWithPath: path).standardizedFileURL
         let verifyOnly = request["verify_only"] as? Bool ?? false
         let job = unfinished(url, target) ?? enqueue(url, target)
-        if !job.isRunning { start(job, deliver: !verifyOnly) }
+        if !job.isPending {
+            if verifyOnly || !job.verified { start(job, deliver: false) }
+            else if !verifyOnly && (job.state == .verified || (job.state == .failed && job.verified)) { start(job, deliver: true) }
+        }
         await finished(job, progress)
-        // It was still verifying, dropped in by hand, when the agent asked to deliver it.
+        // Verification must pass before an agent can deliver, just like the manual workflow.
         if !verifyOnly, job.state == .verified {
             start(job, deliver: true)
             await finished(job, progress)
@@ -192,8 +195,8 @@ extension Store {
     // ponytail: polls the job twice a second; observe it instead if agents ever queue many builds at once.
     private func finished(_ job: Job, _ progress: ([String: Any]) -> Void) async {
         var last: Double?
-        while job.isRunning {
-            if let percent = job.progress, percent != last {
+        while job.isPending {
+            if (job.state == .verifying || job.state == .delivering), let percent = job.progress, percent != last {
                 last = percent
                 progress(["progress": percent, "message": job.state == .delivering ? "Delivering" : "Verifying"])
             }
@@ -208,6 +211,8 @@ extension Store {
         // altool sometimes names the account in its messages; the agent has no use for it.
         if job.state == .failed {
             out["errors"] = job.issues.map { $0.replacingOccurrences(of: job.target.appleID, with: "<Apple Account>") }
+        } else if job.state == .uploaded, let issue = job.issue {
+            out["message"] = issue
         }
         return out
     }
@@ -226,9 +231,9 @@ enum MCPServer {
         [
             "name": "upload_build",
             "description": """
-                Upload an .ipa or .pkg to App Store Connect for a developer team. Shipper opens and shows the upload \
-                in its queue. Returns when the upload finishes, which can take several minutes. If the call times \
-                out the upload keeps running: check list_builds instead of uploading again. An uploaded build \
+                Validate an .ipa or .pkg, then upload it to App Store Connect for a developer team. Shipper opens \
+                and shows the build in its queue. Returns after Apple finishes processing when status checks are \
+                configured. If the call times out, check list_builds instead of uploading again. An uploaded build \
                 cannot be deleted from App Store Connect.
                 """,
             "inputSchema": [
@@ -236,7 +241,7 @@ enum MCPServer {
                 "properties": [
                     "path": ["type": "string", "description": "Absolute path of the .ipa or .pkg file."],
                     "team_id": ["type": "string", "description": "Apple Developer Team ID, such as A1B2C3D4E5. See list_teams."],
-                    "verify_only": ["type": "boolean", "description": "Validate with App Store Connect without uploading. Default false."],
+                    "verify_only": ["type": "boolean", "description": "Validate with App Store Connect and stop without uploading. Default false; uploads always validate first."],
                 ],
                 "required": ["path", "team_id"],
             ],
@@ -244,7 +249,7 @@ enum MCPServer {
         ],
         [
             "name": "list_builds",
-            "description": "List the builds in Shipper's queue with their state (verifying, delivering, verified, delivered, failed, stopped), progress and errors.",
+            "description": "List the builds in Shipper's queue with their state (verifying, delivering, verified, uploaded, processing, delivered, failed, stopped), progress and errors.",
             "inputSchema": [
                 "type": "object",
                 "properties": ["team_id": ["type": "string", "description": "Only this team's builds."]],
@@ -321,8 +326,12 @@ enum MCPServer {
             // Shipper isn't open, so nothing is uploading; what's left is the history it keeps of delivered builds.
             let team = (arguments["team_id"] as? String)?.uppercased()
             let saved = UserDefaults.standard.data(forKey: "delivered").flatMap { try? JSONDecoder().decode([Job.Saved].self, from: $0) } ?? []
-            let builds = saved.map {
-                Agent.summary(url: $0.url, info: $0.info, state: "delivered", deliveryID: $0.deliveryID, teamID: accounts.teamID(of: $0.target))
+            let builds = saved.map { item -> [String: Any] in
+                var build = Agent.summary(url: item.url, info: item.info, state: item.state?.rawValue ?? "delivered",
+                                          deliveryID: item.deliveryID, teamID: accounts.teamID(of: item.target))
+                if let issue = item.issue, item.state == .failed { build["errors"] = [issue] }
+                else if let issue = item.issue, item.state == .uploaded { build["message"] = issue }
+                return build
             }.filter { team == nil || ($0["team_id"] as? String)?.uppercased() == team }
             return (text(["builds": builds]), false)
 
