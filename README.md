@@ -103,8 +103,9 @@ keep their existing access; teams added later start disabled until you allow the
 Only Shipper's own entry is written or removed; the rest of the file is kept. A JSON config with comments is
 left alone, because writing it back would lose them: add Shipper by hand instead.
 
-**ChatGPT and Claude in a browser can't use it.** They only connect to servers on the internet, and the
-build and your passwords are on your Mac. Codex is the OpenAI agent that can.
+This MCP setup delegates to the Shipper app, so it is for local AI clients. The standalone ChatGPT Desktop
+plugin below works without the Shipper UI app. ChatGPT web and Claude in a browser cannot launch a local
+MCP process; they need a separately hosted server, which would not directly read a build file on your Mac.
 
 For any other agent, or by hand:
 
@@ -135,6 +136,59 @@ that several of your Apple Accounts belong to is uploaded with the account selec
 that team, otherwise the first that does. If the agent stops waiting, the upload carries on; `list_builds`
 tells it how the upload ended. The app's Stop control stops active validation, upload, or Apple status checking;
 retrying a stopped or failed upload never resends a build that already has a delivery ID.
+
+### ChatGPT Desktop plugin without the Shipper app
+
+This is a separate, local-only MCP server packaged as a ChatGPT plugin. It runs on macOS and does not open or
+depend on the Shipper UI app. It can list teams, validate a local build, and validate then upload an `.ipa` or
+`.pkg`. It does not show a queue window or monitor Apple's post-upload processing; use App Store Connect to
+check processing status. ChatGPT's local-app plugins run in ChatGPT Desktop; saving one to an account does not
+make its local tools available in ChatGPT web or mobile.
+
+**Requirements:** ChatGPT Desktop for macOS, macOS 14 or later, and Xcode (for Apple's `xcrun altool`).
+
+Build the plugin ZIP from source:
+
+```sh
+./build-chatgpt-plugin.sh
+```
+
+The output is `Shipper-ChatGPT-Plugin.zip`. Expand it, open Terminal in the expanded folder, and configure
+each Apple Account once. This setup runs locally; the app-specific password is typed with terminal echo off,
+validated with Apple, and saved in the macOS login Keychain. It is never a plugin tool argument or sent in a
+ChatGPT message.
+
+```sh
+./mcp/shipper-mcp --setup
+```
+
+In ChatGPT Desktop, install **Plugin Creator**, open Plugins, select **+**, and ask it to create a Desktop-only
+Shipper plugin from the expanded bundle, keeping its `.mcp.json` local MCP server and `skills/shipper/SKILL.md`.
+Review the tools, install the plugin, then ask it to list teams or validate a build. Its bundled instructions
+tell ChatGPT to confirm with you before an upload; the server always runs Apple's validation again before delivering.
+
+If distributing the ZIP to others, each person needs a Mac with Xcode and ChatGPT Desktop, and must run
+`shipper-mcp --setup` on their own machine. Do not distribute a configured Keychain or ask people to put
+Apple passwords into chat. The local plugin bundle includes the MCP executable and skill, not anyone's
+credentials.
+
+#### Publish or share the ChatGPT plugin
+
+To share inside a ChatGPT Business or Enterprise/Edu workspace:
+
+1. Have a workspace owner/admin enable plugin creation and publishing permissions for your role.
+2. Create and test the plugin in ChatGPT Desktop with Plugin Creator. Confirm that the three local tools work
+   on the Mac that will run them.
+3. In ChatGPT, open **Plugins**, select the plugin you own, open **… → Share plugin**, and choose **Visible in
+   workspace directory** (or a link/invite option).
+4. Each recipient installs the plugin in ChatGPT Desktop and separately installs the plugin ZIP and configures
+   their own Apple Account on their Mac. Workspace sharing does not copy local executables or credentials.
+
+Publishing to a workspace directory does **not** list the plugin in a public directory. OpenAI's public
+Verified directory is reviewed by OpenAI; there is no self-service public publish step documented. This
+plugin is Desktop-only because its MCP server needs local files and Xcode. See [OpenAI's plugin guide](https://help.openai.com/en/articles/20001256-plugins-in-chatgpt)
+and [workspace sharing guide](https://help.openai.com/en/articles/20001256-plugins-in-chatgpt#share-and-publish-workspace-plugins)
+for current availability and permissions.
 
 ### Why an app-specific password?
 

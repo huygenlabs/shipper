@@ -1,0 +1,29 @@
+{
+  "name": "shipper-app-store-connect",
+  "version": "1.0.0",
+  "description": "Validate and upload local iOS and macOS builds to App Store Connect from ChatGPT Desktop.",
+  "author": {
+    "name": "HuygenLabs",
+    "url": "https://github.com/huygenlabs/shipper"
+  },
+  "repository": "https://github.com/huygenlabs/shipper/tree/main/chatgpt-plugin",
+  "license": "Apache-2.0",
+  "keywords": ["app-store-connect", "ios", "macos", "upload", "mcp"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Shipper for App Store Connect",
+    "shortDescription": "Validate and deliver local .ipa and .pkg builds",
+    "longDescription": "Use ChatGPT Desktop on macOS to list configured Apple Developer teams, validate a local .ipa or .pkg with Apple's Transporter, and upload it to App Store Connect. Requires Xcode and a one-time local Apple Account setup. No Shipper UI app is required.",
+    "developerName": "HuygenLabs",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Write"],
+    "websiteURL": "https://github.com/huygenlabs/shipper",
+    "defaultPrompt": [
+      "List the App Store Connect teams configured on this Mac",
+      "Validate this local IPA without uploading it",
+      "Upload this IPA to App Store Connect after validation"
+    ],
+    "brandColor": "#5966D9"
+  }
+}

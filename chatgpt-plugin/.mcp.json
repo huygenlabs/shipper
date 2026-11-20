@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "shipper": {
+      "cwd": ".",
+      "command": "./mcp/shipper-mcp",
+      "args": []
+    }
+  }
+}
