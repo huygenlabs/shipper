@@ -107,18 +107,29 @@ enum Keychain {
     }
 
     static func save(_ password: String, for account: String, service: String = "Shipper") -> Bool {
-        delete(account, service: service)
         var q = query(account, service: service)
-        q[kSecValueData] = Data(password.utf8)
+        let data = Data(password.utf8)
+        let status = SecItemUpdate(q as CFDictionary, [kSecValueData: data] as CFDictionary)
+        if status == errSecSuccess { return true }
+        guard status == errSecItemNotFound else { return false }
+        q[kSecValueData] = data
         return SecItemAdd(q as CFDictionary, nil) == errSecSuccess
     }
 
-    static func load(_ account: String, service: String = "Shipper") -> String? {
+    static func read(_ account: String, service: String = "Shipper") -> (value: String?, status: OSStatus) {
         var q = query(account, service: service)
         q[kSecReturnData] = true
         var out: CFTypeRef?
-        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let data = out as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        let status = SecItemCopyMatching(q as CFDictionary, &out)
+        guard status == errSecSuccess else { return (nil, status) }
+        guard let data = out as? Data, let value = String(data: data, encoding: .utf8) else {
+            return (nil, errSecDecode)
+        }
+        return (value, errSecSuccess)
+    }
+
+    static func load(_ account: String, service: String = "Shipper") -> String? {
+        read(account, service: service).value
     }
 
     static func delete(_ account: String, service: String = "Shipper") {
@@ -341,7 +352,10 @@ final class Job: Identifiable {
 
 @Observable @MainActor
 final class Store {
-    /// Signed-in Apple Accounts and their teams; each app-specific password lives in the Keychain.
+    private static let passwordVaultAccount = "apple-account-passwords"
+    private static let passwordVaultService = "Shipper Credentials"
+
+    /// Signed-in Apple Accounts and their teams; app-specific passwords share one protected Keychain item.
     var accounts: [Account] = [] {
         didSet { UserDefaults.standard.set(try? JSONEncoder().encode(accounts), forKey: "accounts") }
     }
@@ -365,6 +379,7 @@ final class Store {
     var dismissedAPIKeyNotices: Set<String> = [] {
         didSet { UserDefaults.standard.set(Array(dismissedAPIKeyNotices), forKey: "dismissedAPIKeyNotices") }
     }
+    @ObservationIgnored private var cachedAccountPasswords: [String: String]?
 
     init() {
         let defaults = UserDefaults.standard
@@ -387,6 +402,56 @@ final class Store {
     }
 
     private func apiKeychainAccount(_ appleID: String, _ teamID: String) -> String { "\(appleID)|\(teamID)" }
+
+    /// Loads the shared credential item and migrates any existing per-account items into it once.
+    private func accountPasswords() -> [String: String]? {
+        if let cachedAccountPasswords { return cachedAccountPasswords }
+
+        let vault = Keychain.read(Self.passwordVaultAccount, service: Self.passwordVaultService)
+        var passwords: [String: String]
+        switch vault.status {
+        case errSecSuccess:
+            guard let value = vault.value, let data = value.data(using: .utf8),
+                  let decoded = try? JSONDecoder().decode([String: String].self, from: data) else { return nil }
+            passwords = decoded
+        case errSecItemNotFound:
+            passwords = [:]
+        default:
+            return nil
+        }
+
+        var migrated: [String] = []
+        for account in accounts where passwords[account.appleID] == nil {
+            let legacy = Keychain.read(account.appleID)
+            if legacy.status == errSecSuccess, let password = legacy.value {
+                passwords[account.appleID] = password
+                migrated.append(account.appleID)
+            } else if legacy.status != errSecItemNotFound {
+                return nil
+            }
+        }
+
+        if !migrated.isEmpty {
+            guard let data = try? JSONEncoder().encode(passwords), let value = String(data: data, encoding: .utf8),
+                  Keychain.save(value, for: Self.passwordVaultAccount, service: Self.passwordVaultService) else { return nil }
+            for appleID in migrated { Keychain.delete(appleID) }
+        }
+
+        cachedAccountPasswords = passwords
+        return passwords
+    }
+
+    private func saveAccountPasswords(_ passwords: [String: String]) -> Bool {
+        if passwords.isEmpty {
+            Keychain.delete(Self.passwordVaultAccount, service: Self.passwordVaultService)
+            cachedAccountPasswords = [:]
+            return true
+        }
+        guard let data = try? JSONEncoder().encode(passwords), let value = String(data: data, encoding: .utf8),
+              Keychain.save(value, for: Self.passwordVaultAccount, service: Self.passwordVaultService) else { return false }
+        cachedAccountPasswords = passwords
+        return true
+    }
 
     func apiPrivateKey(for target: Target) -> String? {
         guard let teamID = accounts.teamID(of: target) else { return nil }
@@ -466,7 +531,10 @@ final class Store {
         guard Auth.isValidAppleID(appleID) else { return "Enter your Apple Account email address." }
         let (providers, error) = await fetchProviders(appleID, password: password)
         if let error { return error }
-        guard Keychain.save(password, for: appleID) else { return "Signed in, but the password couldn't be saved to the Keychain." }
+        guard var passwords = accountPasswords() else { return "Shipper couldn't access your saved passwords in Keychain." }
+        passwords[appleID] = password
+        guard saveAccountPasswords(passwords) else { return "Signed in, but the password couldn't be saved to the Keychain." }
+        Keychain.delete(appleID) // Remove a stale per-account entry left by an older Shipper version.
         let oldProviders = accounts.first(where: { $0.appleID == appleID })?.providers ?? []
         let account = Account(appleID: appleID, providers: preservingAPIKeys(in: providers, from: oldProviders))
         if let i = accounts.firstIndex(where: { $0.appleID == appleID }) { accounts[i] = account } else { accounts.append(account) }
@@ -477,8 +545,12 @@ final class Store {
     /// Re-reads an account's teams with its saved password.
     func refresh(_ appleID: String) async {
         guard !refreshing.contains(appleID) else { return }
-        // No saved password (or Keychain access denied): never send an empty one, since failed logins can lock the account.
-        guard let password = Keychain.load(appleID) else {
+        guard let passwords = accountPasswords() else {
+            refreshErrors[appleID] = "Shipper couldn't access saved passwords in Keychain."
+            return
+        }
+        // Never send an empty password, since failed logins can lock the account.
+        guard let password = passwords[appleID] else {
             refreshErrors[appleID] = Self.missingPassword
             return
         }
@@ -513,9 +585,18 @@ final class Store {
     }
 
     func signOut(_ appleID: String) {
+        guard var passwords = accountPasswords() else {
+            refreshErrors[appleID] = "Shipper couldn't access saved passwords in Keychain. Try signing out again after allowing access."
+            return
+        }
+        passwords.removeValue(forKey: appleID)
+        guard saveAccountPasswords(passwords) else {
+            refreshErrors[appleID] = "The saved password couldn't be removed from Keychain. Try signing out again."
+            return
+        }
+        Keychain.delete(appleID) // Clean up a per-account credential if migration was previously interrupted.
         for job in jobs where job.target.appleID == appleID { stop(job) }
         jobs.removeAll { $0.target.appleID == appleID }
-        Keychain.delete(appleID)
         for provider in accounts.first(where: { $0.appleID == appleID })?.providers ?? [] {
             if !provider.teamID.isEmpty {
                 Keychain.delete(apiKeychainAccount(appleID, provider.teamID), service: "Shipper ASC API")
@@ -562,7 +643,7 @@ final class Store {
     func start(_ job: Job, deliver: Bool) {
         guard !job.isPending else { return }
         let appleID = job.target.appleID
-        guard let password = Keychain.load(appleID) else {
+        guard let passwords = accountPasswords(), let password = passwords[appleID] else {
             job.state = .failed
             job.issues = [Self.missingPassword]
             job.issue = Self.missingPassword
