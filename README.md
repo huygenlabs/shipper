@@ -6,12 +6,28 @@ A small macOS app for sending `.ipa` and `.pkg` builds to App Store Connect, mod
 Sign in to several Apple Accounts at once, pick the developer account (team) a build belongs to, drop the
 file in, and Shipper verifies it on its own. When verification passes, a **Deliver** button appears.
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/home-dark.png">
-  <img src="docs/screenshots/home.png" alt="Shipper with two Apple Accounts in the sidebar and a queue of builds: one verified, one verifying, one failed, one delivered">
-</picture>
+## Contents
 
-<p align="center"><img src="docs/screenshots/sign-in.png" width="480" alt="Shipper sign-in screen"></p>
+- [Features](#features)
+- [Requirements](#requirements)
+- [How to install (.dmg file or plugin)](#how-to-install-dmg-file-or-plugin)
+- [Use Shipper](#use-shipper)
+- [Use with AI agents](#use-with-ai-agents)
+- [ChatGPT Desktop plugin without the Shipper app](#chatgpt-desktop-plugin-without-the-shipper-app)
+- [Why an app-specific password?](#why-an-app-specific-password)
+- [Checking Apple's processing status](#checking-apples-processing-status)
+- [Security](#security)
+- [Build from source](#build-from-source)
+- [How it works](#how-it-works)
+- [License](#license)
+
+<table>
+  <tr>
+    <td align="center"><a href="docs/screenshots/sign-in.png"><img src="docs/screenshots/sign-in.png" alt="Shipper sign-in screen with empty sample fields" width="100%"></a><br><sub>Sign in</sub></td>
+    <td align="center"><a href="docs/screenshots/home.png"><img src="docs/screenshots/home.png" alt="Shipper home screen with fictional accounts and builds" width="100%"></a><br><sub>Home</sub></td>
+    <td align="center"><a href="docs/screenshots/connect-ai-preview.svg"><img src="docs/screenshots/connect-ai-preview.svg" alt="Preview of the Connect AI Agents screen with fictional agents and teams" width="100%"></a><br><sub>Connect AI preview</sub></td>
+  </tr>
+</table>
 
 <sub>Accounts, teams and builds in the screenshots are made up.</sub>
 
@@ -45,7 +61,7 @@ file in, and Shipper verifies it on its own. When verification passes, a **Deliv
 - An Apple Account with access to App Store Connect, plus an
   [app-specific password](https://support.apple.com/102654) for it.
 
-## Install
+## How to install (.dmg file or plugin)
 
 1. Download **[Shipper.dmg](https://github.com/huygenlabs/shipper/raw/main/Shipper.dmg)**.
 2. Open it and drag **Shipper** into **Applications**.
@@ -60,12 +76,15 @@ file in, and Shipper verifies it on its own. When verification passes, a **Deliv
 To check the download isn't corrupted, compare its checksum. The checksum lives in this same repo, so it
 can't reveal a tampered repo. If that matters to you, build from source instead.
 
+To install only the AI tools in ChatGPT Desktop without the Shipper app, see
+[ChatGPT Desktop plugin](#chatgpt-desktop-plugin-without-the-shipper-app).
+
 ```sh
 shasum -a 256 ~/Downloads/Shipper.dmg
 # 74cd4896cc24f90897ce4f08bf06bee2ab705ca91efe01a8b9e8f7481db89b8b
 ```
 
-## Use
+## Use Shipper
 
 1. Sign in with your Apple Account email and an **app-specific password** (not your normal password).
 2. Pick a developer account in the sidebar.
@@ -147,48 +166,24 @@ make its local tools available in ChatGPT web or mobile.
 
 **Requirements:** ChatGPT Desktop for macOS, macOS 14 or later, and Xcode (for Apple's `xcrun altool`).
 
-Build the plugin ZIP from source:
+Run this command to download the plugin and set up its local credentials:
 
 ```sh
-./build-chatgpt-plugin.sh
-```
-
-The output is `Shipper-ChatGPT-Plugin.zip`. Expand it, open Terminal in the expanded folder, and configure
-each Apple Account once. This setup runs locally; the app-specific password is typed with terminal echo off,
-validated with Apple, and saved in the macOS login Keychain. It is never a plugin tool argument or sent in a
-ChatGPT message.
-
-```sh
+curl -fsSL https://github.com/huygenlabs/shipper/raw/main/Shipper-ChatGPT-Plugin.zip \
+  -o ~/Downloads/Shipper-ChatGPT-Plugin.zip && \
+unzip -oq ~/Downloads/Shipper-ChatGPT-Plugin.zip -d ~/Downloads && \
+cd ~/Downloads/Shipper-ChatGPT-Plugin && \
 ./mcp/shipper-mcp --setup
 ```
+
+Configure each Apple Account once. The setup runs locally; the app-specific password is typed with terminal
+echo off, validated with Apple, and saved in the macOS login Keychain. It is never a plugin tool argument or
+sent in a ChatGPT message.
 
 In ChatGPT Desktop, install **Plugin Creator**, open Plugins, select **+**, and ask it to create a Desktop-only
 Shipper plugin from the expanded bundle, keeping its `.mcp.json` local MCP server and `skills/shipper/SKILL.md`.
 Review the tools, install the plugin, then ask it to list teams or validate a build. Its bundled instructions
 tell ChatGPT to confirm with you before an upload; the server always runs Apple's validation again before delivering.
-
-If distributing the ZIP to others, each person needs a Mac with Xcode and ChatGPT Desktop, and must run
-`shipper-mcp --setup` on their own machine. Do not distribute a configured Keychain or ask people to put
-Apple passwords into chat. The local plugin bundle includes the MCP executable and skill, not anyone's
-credentials.
-
-#### Publish or share the ChatGPT plugin
-
-To share inside a ChatGPT Business or Enterprise/Edu workspace:
-
-1. Have a workspace owner/admin enable plugin creation and publishing permissions for your role.
-2. Create and test the plugin in ChatGPT Desktop with Plugin Creator. Confirm that the three local tools work
-   on the Mac that will run them.
-3. In ChatGPT, open **Plugins**, select the plugin you own, open **… → Share plugin**, and choose **Visible in
-   workspace directory** (or a link/invite option).
-4. Each recipient installs the plugin in ChatGPT Desktop and separately installs the plugin ZIP and configures
-   their own Apple Account on their Mac. Workspace sharing does not copy local executables or credentials.
-
-Publishing to a workspace directory does **not** list the plugin in a public directory. OpenAI's public
-Verified directory is reviewed by OpenAI; there is no self-service public publish step documented. This
-plugin is Desktop-only because its MCP server needs local files and Xcode. See [OpenAI's plugin guide](https://help.openai.com/en/articles/20001256-plugins-in-chatgpt)
-and [workspace sharing guide](https://help.openai.com/en/articles/20001256-plugins-in-chatgpt#share-and-publish-workspace-plugins)
-for current availability and permissions.
 
 ### Why an app-specific password?
 
