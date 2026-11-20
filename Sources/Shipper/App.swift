@@ -628,29 +628,36 @@ struct QueueView: View {
     private var jobs: [Job] { store.jobs.filter { $0.target == store.selection } }
 
     var body: some View {
-        Group {
-            if store.selection == nil {
-                Text("Select a developer account").foregroundStyle(.secondary)
-            } else if jobs.isEmpty {
-                VStack(spacing: 0) {
-                    if let target = store.selection, store.shouldShowAPIKeyNotice(for: target) {
-                        APIKeySetupNotice(target: target)
-                    }
-                    emptyState
-                }
-            } else {
-                List {
-                    if let target = store.selection, store.shouldShowAPIKeyNotice(for: target) {
-                        APIKeySetupNotice(target: target)
+        GeometryReader { proxy in
+            let noticeTarget = store.selection.flatMap { store.shouldShowAPIKeyNotice(for: $0) ? $0 : nil }
+            List {
+                if store.selection == nil {
+                    Text("Select a developer account")
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: proxy.size.height)
+                        .listRowInsets(EdgeInsets())
+                        .listRowSeparator(.hidden)
+                } else {
+                    if let noticeTarget {
+                        APIKeySetupNotice(target: noticeTarget)
                             .listRowInsets(EdgeInsets())
                             .listRowSeparator(.hidden)
                     }
-                    ForEach(jobs) { job in
-                        JobRow(job: job) { logJob = job }
+                    if jobs.isEmpty {
+                        emptyState
+                            .frame(height: max(proxy.size.height - (noticeTarget == nil ? 0 : 120), 240))
+                            .listRowInsets(EdgeInsets())
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                    } else {
+                        ForEach(jobs) { job in
+                            JobRow(job: job) { logJob = job }
+                        }
                     }
                 }
-                .listStyle(.inset)
             }
+            .listStyle(.inset)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .dropDestination(for: URL.self) { urls, _ in
