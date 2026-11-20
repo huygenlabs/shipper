@@ -13,7 +13,7 @@ file in, and Shipper verifies it on its own. When verification passes, a **Deliv
 - [How to install (.dmg file or plugin)](#how-to-install-dmg-file-or-plugin)
 - [Use Shipper](#use-shipper)
 - [Use with AI agents](#use-with-ai-agents)
-- [ChatGPT Desktop plugin without the Shipper app](#chatgpt-desktop-plugin-without-the-shipper-app)
+- [Standalone AI agent tools for ChatGPT, Claude, and others](#standalone-ai-agent-tools-for-chatgpt-claude-and-others)
 - [Why an app-specific password?](#why-an-app-specific-password)
 - [Checking Apple's processing status](#checking-apples-processing-status)
 - [Security](#security)
@@ -76,8 +76,8 @@ file in, and Shipper verifies it on its own. When verification passes, a **Deliv
 To check the download isn't corrupted, compare its checksum. The checksum lives in this same repo, so it
 can't reveal a tampered repo. If that matters to you, build from source instead.
 
-To install only the AI tools in ChatGPT Desktop without the Shipper app, see
-[ChatGPT Desktop plugin](#chatgpt-desktop-plugin-without-the-shipper-app).
+To install only the AI tools without the Shipper app, see
+[Standalone AI agent tools](#standalone-ai-agent-tools-for-chatgpt-claude-and-others).
 
 ```sh
 shasum -a 256 ~/Downloads/Shipper.dmg
@@ -122,9 +122,9 @@ keep their existing access; teams added later start disabled until you allow the
 Only Shipper's own entry is written or removed; the rest of the file is kept. A JSON config with comments is
 left alone, because writing it back would lose them: add Shipper by hand instead.
 
-This MCP setup delegates to the Shipper app, so it is for local AI clients. The standalone ChatGPT Desktop
-plugin below works without the Shipper UI app. ChatGPT web and Claude in a browser cannot launch a local
-MCP process; they need a separately hosted server, which would not directly read a build file on your Mac.
+This MCP setup delegates to the Shipper app, so it is for local AI clients. The standalone AI agent bundle
+below works without the Shipper UI app. ChatGPT web and Claude in a browser cannot launch a local MCP process;
+they need a separately hosted server, which would not directly read a build file on your Mac.
 
 For any other agent, or by hand:
 
@@ -156,17 +156,21 @@ that team, otherwise the first that does. If the agent stops waiting, the upload
 tells it how the upload ended. The app's Stop control stops active validation, upload, or Apple status checking;
 retrying a stopped or failed upload never resends a build that already has a delivery ID.
 
-### ChatGPT Desktop plugin without the Shipper app
+### Standalone AI agent tools for ChatGPT, Claude, and others
 
-This is a separate, local-only MCP server packaged as a ChatGPT plugin. It runs on macOS and does not open or
-depend on the Shipper UI app. It can list teams, validate a local build, and validate then upload an `.ipa` or
-`.pkg`. It does not show a queue window or monitor Apple's post-upload processing; use App Store Connect to
-check processing status. ChatGPT's local-app plugins run in ChatGPT Desktop; saving one to an account does not
-make its local tools available in ChatGPT web or mobile.
+The standalone bundle provides a local MCP server and does not open or depend on the Shipper UI app. It can
+list teams, validate a local build, and validate then upload an `.ipa` or `.pkg`. It does not show a queue
+window or monitor Apple's post-upload processing; use App Store Connect to check processing status.
 
-**Requirements:** ChatGPT Desktop for macOS, macOS 14 or later, and Xcode (for Apple's `xcrun altool`).
+Use it with **ChatGPT Desktop** through Plugin Creator, or connect the same MCP server directly to **Claude
+Code, Claude Desktop, Cursor, Codex, or another local MCP-compatible agent**. A regular ChatGPT or Claude
+browser session cannot launch a process on your Mac. Each agent app needs its own connection to the local
+server.
 
-Run this command to download the plugin and set up its local credentials:
+**Requirements:** macOS 14 or later and Xcode (for Apple's `xcrun altool`). ChatGPT Desktop is needed only if
+you want to use the ChatGPT plugin.
+
+Run this command to download the bundle and set up its local credentials:
 
 ```sh
 curl -fsSL https://github.com/huygenlabs/shipper/raw/main/Shipper-ChatGPT-Plugin.zip \
@@ -180,10 +184,33 @@ Configure each Apple Account once. The setup runs locally; the app-specific pass
 echo off, validated with Apple, and saved in the macOS login Keychain. It is never a plugin tool argument or
 sent in a ChatGPT message.
 
-In ChatGPT Desktop, install **Plugin Creator**, open Plugins, select **+**, and ask it to create a Desktop-only
+**ChatGPT Desktop:** install **Plugin Creator**, open Plugins, select **+**, and ask it to create a Desktop-only
 Shipper plugin from the expanded bundle, keeping its `.mcp.json` local MCP server and `skills/shipper/SKILL.md`.
-Review the tools, install the plugin, then ask it to list teams or validate a build. Its bundled instructions
-tell ChatGPT to confirm with you before an upload; the server always runs Apple's validation again before delivering.
+Review the tools and install the plugin.
+
+**Claude Code:** add the standalone executable as a local MCP server:
+
+```sh
+claude mcp add --scope user shipper -- "$HOME/Downloads/Shipper-ChatGPT-Plugin/mcp/shipper-mcp"
+```
+
+**Claude Desktop and other MCP clients:** add the executable path to the client's MCP server configuration:
+
+```json
+{
+  "mcpServers": {
+    "shipper": {
+      "command": "/Users/YOU/Downloads/Shipper-ChatGPT-Plugin/mcp/shipper-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+Replace `/Users/YOU` with your Mac home folder, then restart the agent. Ask it to list teams or validate a
+build. The ChatGPT plugin includes instructions to confirm the team and file before upload. With other
+agents, ask them to confirm those details before uploading; the server always runs Apple's validation again
+before delivering.
 
 ### Why an app-specific password?
 
