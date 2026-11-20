@@ -175,13 +175,21 @@ extension Store {
             let known = Set(accounts.flatMap(\.providers).map(\.teamID).filter { !$0.isEmpty }).sorted()
             return ["error": "No Apple Account signed in to Shipper has team \(team). Teams it can upload for: \(known.joined(separator: ", "))."]
         }
-        selection = target  // show the upload where the person is looking
         let url = URL(fileURLWithPath: path).standardizedFileURL
         let verifyOnly = request["verify_only"] as? Bool ?? false
+        guard verifyOnly || isAgentUploadAllowed(for: team) else {
+            return ["error": "AI-agent uploads are disabled for team \(team). Enable this team in Shipper → Connect AI Agents. Validation-only requests are still allowed."]
+        }
+        selection = target  // show the upload where the person is looking
         let job = unfinished(url, target) ?? enqueue(url, target)
         if !job.isPending {
-            if verifyOnly || !job.verified { start(job, deliver: false) }
-            else if !verifyOnly && (job.state == .verified || (job.state == .failed && job.verified)) { start(job, deliver: true) }
+            if job.deliveryID != nil {
+                if !verifyOnly && [.uploaded, .stopped].contains(job.state) { retryProcessingCheck(job) }
+            } else if verifyOnly || !job.verified {
+                start(job, deliver: false)
+            } else if job.state == .verified || job.state == .stopped || (job.state == .failed && job.verified) {
+                start(job, deliver: true)
+            }
         }
         await finished(job, progress)
         // Verification must pass before an agent can deliver, just like the manual workflow.
@@ -207,6 +215,12 @@ extension Store {
     private func summary(_ job: Job) -> [String: Any] {
         var out = Agent.summary(url: job.url, info: job.info, state: job.state.rawValue, deliveryID: job.deliveryID,
                                 teamID: accounts.teamID(of: job.target))
+        out["validation_report"] = [
+            "passed": job.verified,
+            "findings": job.verified ? [] : job.issues.map { $0.replacingOccurrences(of: job.target.appleID, with: "<Apple Account>") },
+            "suggestions": job.verified ? [] : job.validationSuggestions,
+        ]
+        if job.deliveryID != nil { out["app_store_connect_url"] = "https://appstoreconnect.apple.com" }
         if job.isRunning, let percent = job.progress { out["progress"] = percent }
         // altool sometimes names the account in its messages; the agent has no use for it.
         if job.state == .failed {
@@ -234,7 +248,9 @@ enum MCPServer {
                 Validate an .ipa or .pkg, then upload it to App Store Connect for a developer team. Shipper opens \
                 and shows the build in its queue. Returns after Apple finishes processing when status checks are \
                 configured. If the call times out, check list_builds instead of uploading again. An uploaded build \
-                cannot be deleted from App Store Connect.
+                cannot be deleted from App Store Connect. Results include preflight findings and suggested fixes. \
+                Uploads are blocked for teams disabled in Shipper's Agent upload access settings; list_teams shows \
+                which teams are enabled. Set verify_only to validate without uploading, even for a disabled team.
                 """,
             "inputSchema": [
                 "type": "object",
@@ -315,9 +331,13 @@ enum MCPServer {
         switch params["name"] as? String {
         case "list_teams":
             guard !accounts.isEmpty else { return ("No Apple Account is signed in. Open Shipper and sign in first.", true) }
+            let savedPermissions = UserDefaults.standard.stringArray(forKey: "agentAllowedTeamIDs").map { Set($0) }
             var seen = Set<String>()
-            let teams = accounts.flatMap(\.providers).filter { !$0.teamID.isEmpty && seen.insert($0.teamID).inserted }
-            return (text(["teams": teams.map { ["team_id": $0.teamID, "name": $0.name] }]), false)
+            let teams = accounts.flatMap(\.providers).filter { !$0.teamID.isEmpty && seen.insert($0.teamID.uppercased()).inserted }
+            return (text(["teams": teams.map { provider in
+                ["team_id": provider.teamID, "name": provider.name,
+                 "agent_upload_allowed": savedPermissions?.contains(provider.teamID.uppercased()) ?? true]
+            }]), false)
 
         case "list_builds":
             var request: [String: Any] = ["op": "builds"]

@@ -107,6 +107,7 @@ struct ContentView: View {
 
 /// One switch per agent found on this Mac: on writes Shipper into that agent's MCP servers, off takes it out.
 struct AgentSetupView: View {
+    @Environment(Store.self) private var store
     @Environment(\.dismiss) private var dismiss
     @State private var connected: Set<String> = []
     @State private var busy: Set<String> = []
@@ -120,7 +121,8 @@ struct AgentSetupView: View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Connect AI Agents").font(.headline).padding()
             Divider()
-            VStack(alignment: .leading, spacing: 18) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
                 Text("A connected agent can upload a build to a team by its Team ID. Its uploads appear in this window.")
                     .fixedSize(horizontal: false, vertical: true)
                 VStack(alignment: .leading, spacing: 6) {
@@ -141,6 +143,43 @@ struct AgentSetupView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
+                DisclosureGroup {
+                    if agentTeams.isEmpty {
+                        Text("Sign in to an Apple Account to manage team access.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        VStack(spacing: 0) {
+                            ForEach(agentTeams, id: \.teamID) { provider in
+                                if provider.teamID != agentTeams.first?.teamID { Divider() }
+                                HStack(spacing: 12) {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(provider.name).lineLimit(1)
+                                        Text(provider.teamID).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    Spacer(minLength: 8)
+                                    Toggle("Allow agent uploads to \(provider.name)", isOn: Binding(
+                                        get: { store.isAgentUploadAllowed(for: provider.teamID) },
+                                        set: { store.setAgentUploadAllowed($0, for: provider.teamID) }
+                                    ))
+                                    .labelsHidden()
+                                    .toggleStyle(.switch)
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                            }
+                        }
+                        .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                        .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(Color(nsColor: .separatorColor)) }
+                    }
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Agent upload access")
+                        Text("Choose which teams connected agents may upload to. Validation-only requests remain available.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
                 // Closed by default: with every agent installed, the open sheet would outgrow a laptop screen.
                 DisclosureGroup("Add to another agent by hand") {
                     Snippet(title: "For its MCP config file", text: Self.config(executable))
@@ -150,8 +189,10 @@ struct AgentSetupView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding()
             }
-            .padding()
+            .frame(height: 360)
             Divider()
             HStack {
                 Spacer()
@@ -159,7 +200,7 @@ struct AgentSetupView: View {
             }
             .padding()
         }
-        .frame(width: 580)
+        .frame(width: 500, height: 480)
         .onAppear { connected = Set(agents.filter { $0.isConnected(to: executable) }.map(\.id)) }
     }
 
@@ -183,6 +224,12 @@ struct AgentSetupView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    private var agentTeams: [Provider] {
+        var seen = Set<String>()
+        return store.accounts.flatMap(\.providers).filter { !($0.teamID.isEmpty) && seen.insert($0.teamID.uppercased()).inserted }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     /// The file the switch changes; once flipped, what's left for the person to do.
@@ -622,6 +669,7 @@ struct ProviderIcon: View {
 
 struct QueueView: View {
     @Environment(Store.self) private var store
+    @Environment(\.openURL) private var openURL
     @State private var targeted = false
     @State private var logJob: Job?
 
@@ -669,9 +717,30 @@ struct QueueView: View {
                 RoundedRectangle(cornerRadius: 10).strokeBorder(Color.accentColor, lineWidth: 3).padding(6)
             }
         }
-        .navigationTitle(store.selectedProvider?.name ?? store.selection?.appleID ?? "Shipper")
-        .navigationSubtitle(store.selectedProvider == nil ? "" : store.selection?.appleID ?? "")
+        .navigationTitle("")
+        .navigationSubtitle("")
         .toolbar {
+            ToolbarItem(placement: .navigation) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(store.selectedProvider?.name ?? store.selection?.appleID ?? "Shipper")
+                        .font(.headline)
+                        .lineLimit(1)
+                    if let appleID = store.selectedProvider == nil ? nil : store.selection?.appleID {
+                        Text(appleID).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
+            }
+            if store.selectedProvider != nil {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        openURL(Self.appStoreConnectURL)
+                    } label: {
+                        Label("Open App Store Connect", systemImage: "arrow.up.right.square")
+                    }
+                    .help("Open App Store Connect")
+                    .accessibilityLabel("Open App Store Connect for this team")
+                }
+            }
             ToolbarItem {
                 Button(action: store.clear) { Label("Clear", systemImage: "clear") }
                     .help("Remove finished builds from this list")
@@ -685,6 +754,8 @@ struct QueueView: View {
         }
         .sheet(item: $logJob) { LogView(job: $0) }
     }
+
+    private static let appStoreConnectURL = URL(string: "https://appstoreconnect.apple.com")!
 
     private var emptyState: some View {
         VStack(spacing: 14) {
@@ -843,19 +914,30 @@ struct JobRow: View {
                 }
                 if showsError {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(job.issues.joined(separator: "\n\n"))
+                        Text(job.verified ? job.issues.joined(separator: "\n\n") : job.validationReport)
                             .font(.system(.callout, design: .monospaced))
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: .infinity, alignment: .leading)
                         HStack {
-                            Button("Copy Message") {
+                            Button(job.verified ? "Copy Message" : "Copy Validation Report") {
                                 NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(job.issues.joined(separator: "\n\n"), forType: .string)
+                                NSPasteboard.general.setString(job.verified ? job.issues.joined(separator: "\n\n") : job.validationReport, forType: .string)
                             }
                             Button("View Full Log", action: showLog)
                         }
                         .controlSize(.small)
+                        if !job.verified {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Suggested next steps").font(.callout.weight(.semibold))
+                                ForEach(job.validationSuggestions, id: \.self) { suggestion in
+                                    Label(suggestion, systemImage: "arrow.turn.down.right")
+                                        .font(.callout)
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                        }
                     }
                     .padding(10)
                     .background(Color.red.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
@@ -871,7 +953,7 @@ struct JobRow: View {
     /// Verify runs on add; Deliver appears only once the package has passed verification.
     @ViewBuilder private var actions: some View {
         if job.state == .processing {
-            EmptyView()
+            Button("Stop Check") { store.stop(job) }
         } else if job.isRunning {
             Button("Stop") { store.stop(job) }
         } else if job.state == .delivered || job.state == .uploaded {
@@ -880,8 +962,17 @@ struct JobRow: View {
                     .disabled(job.deliveryID == nil)
             }
             Button("View Log", action: showLog)
+        } else if job.state == .stopped, job.deliveryID != nil {
+            Button("Resume Check") { store.retryProcessingCheck(job) }
         } else {
-            if job.verified {
+            if job.state == .failed || job.state == .stopped {
+                if job.verified {
+                    Button("Retry Upload") { store.retry(job) }
+                        .buttonStyle(.borderedProminent)
+                } else {
+                    Button("Retry Validation") { store.retry(job) }
+                }
+            } else if job.verified {
                 Button("Deliver") { store.start(job, deliver: true) }
                     .buttonStyle(.borderedProminent)
             } else {
@@ -896,7 +987,14 @@ struct JobRow: View {
 
     @ViewBuilder private var menuItems: some View {
         Button("View Log", action: showLog).disabled(job.log.isEmpty)
-        Button("Verify Again") { store.start(job, deliver: false) }.disabled(job.isPending || !job.verified)
+        Button("Verify Again") { store.start(job, deliver: false) }.disabled(job.isPending || job.deliveryID != nil)
+        if job.isPending { Button(job.state == .processing ? "Stop Status Check" : "Stop") { store.stop(job) } }
+        if job.state == .failed || job.state == .stopped, job.deliveryID == nil {
+            Button(job.verified ? "Retry Upload" : "Retry Validation") { store.retry(job) }
+        }
+        if [.uploaded, .stopped].contains(job.state), job.deliveryID != nil {
+            Button("Check Processing Again") { store.retryProcessingCheck(job) }
+        }
         Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([job.url]) }
         Divider()
         Button("Remove from Queue", role: .destructive) { store.remove(job) }

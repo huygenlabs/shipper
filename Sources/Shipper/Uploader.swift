@@ -304,6 +304,41 @@ final class Job: Identifiable {
     var isPending: Bool { isRunning || state == .processing }
     var name: String { info?.name ?? url.deletingPathExtension().lastPathComponent }
 
+    /// Focused next steps for the validation errors that most often have a direct project-side fix.
+    var validationSuggestions: [String] {
+        let output = issues.joined(separator: "\n").lowercased()
+        var suggestions: [String] = []
+        if info == nil {
+            suggestions.append("Shipper could not read this package's app metadata. Re-export a complete .ipa or .pkg and try again.")
+        }
+        if output.contains("provisioning") || output.contains("code signature") || output.contains("codesign") || output.contains("signature") {
+            suggestions.append("Check the signing certificate and provisioning profile, then export the archive again for App Store distribution.")
+        }
+        if output.contains("bundle identifier") || output.contains("bundle id") || output.contains("bundleid") {
+            suggestions.append("Confirm the package's bundle ID matches the app record and the selected developer team.")
+        }
+        if output.contains("build number") || output.contains("cfbundleversion") || output.contains("version number") {
+            suggestions.append("Check the version and build number in the archive, and make sure the build number has not already been uploaded for this version.")
+        }
+        if output.contains("already been uploaded") || output.contains("duplicate") {
+            suggestions.append("Increment the build number, export a new package, and upload that build.")
+        }
+        if suggestions.isEmpty {
+            suggestions.append("Open the full log for Apple's validation message. Check the archive, signing, app record, and selected developer team, then verify again.")
+        }
+        return suggestions
+    }
+
+    var validationReport: String {
+        var lines = ["Preflight validation: \(verified ? "passed" : "failed")"]
+        if let info { lines += ["App: \(info.name)", "Bundle ID: \(info.bundleID)", "Version: \(info.version) (\(info.build))"] }
+        if !verified {
+            if !issues.isEmpty { lines += ["Findings:", issues.joined(separator: "\n")] }
+            lines += ["Suggested next steps:", validationSuggestions.map { "• \($0)" }.joined(separator: "\n")]
+        }
+        return lines.joined(separator: "\n")
+    }
+
     init(url: URL, target: Target) {
         self.url = url
         self.target = target
@@ -374,6 +409,11 @@ final class Store {
     var refreshing: Set<String> = []
     /// Shows the Connect AI Agents sheet; set from the app menu.
     var showsAgentSetup = false
+    /// Team IDs the local AI-agent bridge may upload to. Existing installs retain their current access once;
+    /// newly discovered teams require an explicit opt-in.
+    var agentAllowedTeamIDs: Set<String> = [] {
+        didSet { UserDefaults.standard.set(Array(agentAllowedTeamIDs), forKey: "agentAllowedTeamIDs") }
+    }
     var apiKeyTarget: Target?
     var showsAPIKeySetup = false
     var dismissedAPIKeyNotices: Set<String> = [] {
@@ -384,6 +424,12 @@ final class Store {
     init() {
         let defaults = UserDefaults.standard
         accounts = defaults.data(forKey: "accounts").flatMap { try? JSONDecoder().decode([Account].self, from: $0) } ?? []
+        if let savedTeamIDs = defaults.stringArray(forKey: "agentAllowedTeamIDs") {
+            agentAllowedTeamIDs = Set(savedTeamIDs)
+        } else {
+            agentAllowedTeamIDs = Set(accounts.flatMap(\.providers).map(\.teamID).filter { !$0.isEmpty })
+            defaults.set(Array(agentAllowedTeamIDs), forKey: "agentAllowedTeamIDs")
+        }
         dismissedAPIKeyNotices = Set(defaults.stringArray(forKey: "dismissedAPIKeyNotices") ?? [])
         // Team lists change rarely but do change (new teams, renamed companies), so re-read them each launch.
         for account in accounts {
@@ -397,7 +443,7 @@ final class Store {
     }
 
     private func saveDelivered() {
-        let delivered = jobs.filter { [.uploaded, .processing, .delivered, .failed].contains($0.state) && $0.deliveryID != nil }.map(\.saved)
+        let delivered = jobs.filter { [.uploaded, .processing, .delivered, .failed, .stopped].contains($0.state) && $0.deliveryID != nil }.map(\.saved)
         UserDefaults.standard.set(try? JSONEncoder().encode(delivered), forKey: "delivered")
     }
 
@@ -737,11 +783,26 @@ final class Store {
     }
 
     func retryProcessingCheck(_ job: Job) {
-        guard job.state == .uploaded, job.deliveryID != nil else { return }
+        guard [.uploaded, .stopped].contains(job.state), job.deliveryID != nil else { return }
         job.issue = nil
         job.state = .processing
         saveDelivered()
         monitorProcessing(job)
+    }
+
+    func retry(_ job: Job) {
+        guard !job.isPending, job.deliveryID == nil else { return }
+        start(job, deliver: job.verified)
+    }
+
+    func isAgentUploadAllowed(for teamID: String) -> Bool {
+        agentAllowedTeamIDs.contains(teamID.uppercased())
+    }
+
+    func setAgentUploadAllowed(_ allowed: Bool, for teamID: String) {
+        let teamID = teamID.uppercased()
+        if allowed { agentAllowedTeamIDs.insert(teamID) }
+        else { agentAllowedTeamIDs.remove(teamID) }
     }
 
     func stop(_ job: Job) {

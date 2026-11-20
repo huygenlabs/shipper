@@ -27,8 +27,9 @@ file in, and Shipper verifies it on its own. When verification passes, a **Deliv
   API key, Shipper reports that the upload completed but processing could not be checked.
 - Version, build number and bundle ID read straight from the `.ipa` or `.pkg`.
 - When verification or delivery fails, a one-line error appears under the build. **Details** expands the full
-  message, which you can select or copy.
-- Per-build log, Stop, Show in Finder.
+  message; failed preflight checks also show suggested fixes and can be copied as a validation report.
+- Per-build log, Stop, Retry, Show in Finder. You can stop Apple's background processing check and resume it later.
+- The selected team's header includes a shortcut to App Store Connect.
 - Open `.ipa` and `.pkg` files from Finder with Shipper.
 - **Works with AI agents.** Claude Code, Cursor and other MCP clients can upload a build to a team by its
   Team ID. See [Use with AI agents](#use-with-ai-agents).
@@ -84,6 +85,10 @@ to each one.
 finds on your Mac. Turning one on adds Shipper to that agent's MCP servers; turning it off takes it out.
 Restart the agent afterwards.
 
+Open **Agent upload access** in the same window to choose which developer teams agents may upload to.
+Validation-only requests remain available for blocked teams. Teams already signed in when this control is introduced
+keep their existing access; teams added later start disabled until you allow them.
+
 | Agent | What the switch changes |
 |---|---|
 | Claude Code | runs `claude mcp add --scope user` (`~/.claude.json`) |
@@ -120,15 +125,16 @@ claude mcp add --scope user shipper -- /Applications/Shipper.app/Contents/MacOS/
 
 | Tool | What it does |
 |---|---|
-| `list_teams` | The teams Shipper is signed in to, with their Team IDs. |
-| `upload_build` | Validates the `.ipa` or `.pkg` at `path` for `team_id`, then uploads if validation passes. `verify_only` stops after validation. |
+| `list_teams` | The teams Shipper is signed in to, their Team IDs, and whether agent uploads are allowed. |
+| `upload_build` | Validates the `.ipa` or `.pkg` at `path` for `team_id`, then uploads if validation passes and that team allows agent uploads. `verify_only` stops after validation and remains available for blocked teams. Results include validation findings and suggested next steps. |
 | `list_builds` | The queue: validation, upload, Apple processing state, progress, delivery ID and errors. |
 
 Sign in to your Apple Accounts in Shipper first. When an agent uploads, Shipper opens in the background and
 the build appears in its queue like one you dropped in, with the same progress, log and Stop button. A team
 that several of your Apple Accounts belong to is uploaded with the account selected in the sidebar if it has
 that team, otherwise the first that does. If the agent stops waiting, the upload carries on; `list_builds`
-tells it how the upload ended.
+tells it how the upload ended. The app's Stop control stops active validation, upload, or Apple status checking;
+retrying a stopped or failed upload never resends a build that already has a delivery ID.
 
 ### Why an app-specific password?
 
@@ -167,8 +173,8 @@ the build in App Store Connect for Apple's full error details.
   `~/Library/Application Support/Shipper/` that only your user can open; the app also checks that the caller
   runs as you. Agents see team names, Team IDs and builds, never passwords or Apple Account emails, and can
   only queue `.ipa` and `.pkg` files given by absolute path. Be aware of what this allows: any program already
-  running as you can ask Shipper to upload a build with your signed-in accounts, without a prompt. It can't
-  read the passwords. Uploads always show in Shipper's queue, and a delivered build can't be deleted from
+  running as you can ask Shipper to upload a build for any team enabled in **Agent upload access**, without a prompt.
+  It can't read the passwords. Uploads always show in Shipper's queue, and a delivered build can't be deleted from
   App Store Connect, only expired. Shipper changes an agent's config file only when you flip that agent's
   switch in **Connect AI Agents…**.
 - **Stored settings** (`~/Library/Preferences/io.github.huygenlabs.shipper.plist`): signed-in Apple Account
