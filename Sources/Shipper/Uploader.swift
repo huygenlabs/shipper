@@ -546,6 +546,15 @@ final class Store {
         if let teamID = accounts.teamID(of: target) { dismissedAPIKeyNotices.remove(teamID) }
     }
 
+    /// Shipper 1.3 and older had the bundle ID io.github.huygenlabs.shipper, so their settings live in that domain.
+    /// Copies them over once, then deletes the old copy. Keychain items are keyed by service, not bundle ID, so they stay.
+    static func moveFromOldBundleID(_ old: String = "io.github.huygenlabs.shipper", to defaults: UserDefaults = .standard) {
+        guard defaults.object(forKey: "accounts") == nil,
+              let saved = UserDefaults.standard.persistentDomain(forName: old), !saved.isEmpty else { return }
+        for (key, value) in saved { defaults.set(value, forKey: key) }
+        UserDefaults.standard.removePersistentDomain(forName: old)
+    }
+
     /// Shipper 1.1 and older were saved as "AppUploader". Moves their settings and passwords over once, then deletes
     /// the old copies. Called at launch before the store loads; drop it once nobody runs 1.1.
     static func moveFromOldName() {

@@ -14,6 +14,7 @@ struct ShipperApp: App {
     @AppStorage(Updater.autoCheckKey) private var checksForUpdates = true
 
     init() {
+        Store.moveFromOldBundleID()
         Store.moveFromOldName()
         NotificationService.requestAuthorization()
         // Before anything at launch can hold up the main thread, so an agent that just opened Shipper connects at once.

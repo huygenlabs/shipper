@@ -65,13 +65,8 @@ file in, and Shipper verifies it on its own. When verification passes, a **Deliv
 
 1. Download **[Shipper.dmg](https://github.com/huygenlabs/shipper/raw/main/Shipper.dmg)**.
 2. Open it and drag **Shipper** into **Applications**.
-3. First launch only: Shipper is not notarized by Apple (see [Security](#security)), so macOS blocks it.
-   Open it once, then go to **System Settings → Privacy & Security** and click **Open Anyway**.
-   Or, from Terminal:
-
-   ```sh
-   xattr -dr com.apple.quarantine /Applications/Shipper.app
-   ```
+3. Open Shipper from **Applications**. It is signed with a Developer ID and notarized by Apple, so macOS opens it
+   after the usual "downloaded from the internet" prompt.
 
 To check the download isn't corrupted, compare its checksum. The checksum lives in this same repo, so it
 can't reveal a tampered repo. If that matters to you, build from source instead.
@@ -81,7 +76,7 @@ To install only the AI tools without the Shipper app, see
 
 ```sh
 shasum -a 256 ~/Downloads/Shipper.dmg
-# 74cd4896cc24f90897ce4f08bf06bee2ab705ca91efe01a8b9e8f7481db89b8b
+# fd7dd39383d7dd3b84c43b7b300bdfc7fd88bdd456a669d6044132e57a4097c1
 ```
 
 ## Use Shipper
@@ -241,7 +236,7 @@ the build in App Store Connect for Apple's full error details.
   [`Info.plist`](https://raw.githubusercontent.com/huygenlabs/shipper/main/Info.plist) and, when it lists a newer
   version, `Shipper.dmg`, both from this repo. They send nothing about you or your accounts.
 - **Updates** are checked before they're installed: the new `Shipper.app` must pass the installed copy's code
-  signing requirement (same bundle ID, same signing certificate) and be a newer version. A tampered download
+  signing requirement (same bundle ID, same Developer ID team) and be a newer version. A tampered download
   or repo can't install an app signed by someone else. Shipper replaces itself only where you put it, and
   only when it can write there; otherwise it offers the download instead. Turn updates off with
   **Shipper → Install Updates Automatically**.
@@ -253,16 +248,15 @@ the build in App Store Connect for Apple's full error details.
   It can't read the passwords. Uploads always show in Shipper's queue, and a delivered build can't be deleted from
   App Store Connect, only expired. Shipper changes an agent's config file only when you flip that agent's
   switch in **Connect AI Agents…**.
-- **Stored settings** (`~/Library/Preferences/io.github.huygenlabs.shipper.plist`): signed-in Apple Account
+- **Stored settings** (`~/Library/Preferences/com.huygenlabs.shipper.plist`): signed-in Apple Account
   emails, developer account names and IDs, API Key IDs, Issuer IDs and the last selection. No passwords or private keys.
 - **App Store Connect API keys** are optional and separate from upload passwords. Their `.p8` private key is kept
   in the login Keychain; Shipper uses it to check processing status and deletes it when you sign out.
 - **Builds you add** are read with `/usr/bin/tar` to show their version and bundle ID. Reads are capped at
   16 MB so a malformed archive can't exhaust memory, and nothing is extracted to disk.
-- **Signing:** the app is signed with a self-signed certificate and the hardened runtime. It is **not notarized**,
-  because notarizing needs a paid Developer ID certificate. That's why macOS asks you to approve the first
-  launch. Building from source is the way to be sure of what you run. The certificate stays the same between
-  releases, so the Keychain keeps trusting updated copies of Shipper.
+- **Signing:** the app is signed with the Developer ID of Lovepreet Singh (Team ID `47QKUD5PBL`), uses the
+  hardened runtime and is notarized by Apple. Check a copy with
+  `codesign -dv --verbose=2 /Applications/Shipper.app` and `spctl -a -vv /Applications/Shipper.app`.
 - The app is not sandboxed, because it has to run `xcrun altool`.
 
 ## Build from source
@@ -274,16 +268,15 @@ swift test        # parsing and security checks
 ./build.sh        # build.noindex/Shipper.app (universal) and Shipper.dmg
 ```
 
-On first run `build.sh` creates a self-signed code-signing certificate in its own keychain at
-`~/Library/Application Support/Shipper/signing/`, outside the repo, protected by a random password that only
-your user can read. Every build after that is signed with it, so
-the app keeps the same identity and the Keychain doesn't ask for your Mac password after each rebuild.
+`build.sh` signs with the `Developer ID Application: Lovepreet Singh (47QKUD5PBL)` certificate, which must be in
+your login keychain, then notarizes and staples `Shipper.dmg`. Store the notary credentials once with
+`xcrun notarytool store-credentials shipper-notary` (an App Store Connect API key or an Apple Account with an
+app-specific password). Without that certificate, build an ad-hoc signed copy with `SIGN_IDENTITY=- SKIP_NOTARIZE=1 ./build.sh`.
 
 To release an update, raise `CFBundleShortVersionString` (and `CFBundleVersion`) in `Info.plist`, run
 `./build.sh`, update the checksum above, then commit and push. Installed copies see the new version in
-`Info.plist` on `main`, download the new `Shipper.dmg` and install it. They only accept apps signed with the
-same certificate, so release builds must come from the machine that holds the signing keychain. Back up
-`~/Library/Application Support/Shipper/signing/`; without it, installed copies can't update automatically.
+`Info.plist` on `main`, download the new `Shipper.dmg` and install it. They only accept apps signed by the same
+Developer ID team.
 
 `make-icon.swift` redraws the app icon:
 `swift make-icon.swift && iconutil -c icns build.noindex/AppIcon.iconset -o AppIcon.icns`.

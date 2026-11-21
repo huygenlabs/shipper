@@ -13,13 +13,13 @@
 	<key>CFBundleExecutable</key>
 	<string>Shipper</string>
 	<key>CFBundleIdentifier</key>
-	<string>io.github.huygenlabs.shipper</string>
+	<string>com.huygenlabs.shipper</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.3.1</string>
+	<string>1.4.0</string>
 	<key>CFBundleVersion</key>
-	<string>10</string>
+	<string>11</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026 HuygenLabs</string>
 	<key>LSMinimumSystemVersion</key>

@@ -296,3 +296,18 @@ import Testing
     try fresh.setConnected(true, executable: "/x/Shipper")
     #expect(fresh.isConnected(to: "/x/Shipper"))
 }
+
+@MainActor @Test func movesSettingsFromOldBundleID() {
+    let old = "test.shipper.old-\(UUID())", new = "test.shipper.new-\(UUID())"
+    let defaults = UserDefaults(suiteName: new)!
+    defer { UserDefaults.standard.removePersistentDomain(forName: new); UserDefaults.standard.removePersistentDomain(forName: old) }
+    UserDefaults.standard.setPersistentDomain(["accounts": Data([1]), "selection": "x"], forName: old)
+    Store.moveFromOldBundleID(old, to: defaults)
+    #expect(defaults.data(forKey: "accounts") == Data([1]))
+    #expect(defaults.string(forKey: "selection") == "x")
+    #expect(UserDefaults.standard.persistentDomain(forName: old)?.isEmpty ?? true)
+    // Already has settings: leaves them alone.
+    UserDefaults.standard.setPersistentDomain(["accounts": Data([2])], forName: old)
+    Store.moveFromOldBundleID(old, to: defaults)
+    #expect(defaults.data(forKey: "accounts") == Data([1]))
+}
